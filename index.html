@@ -61,8 +61,21 @@
   var matchResult = null;
   var gameMode = "ai"; // ai | vs
   var playerSide = "L"; // which side the human controls in AI mode
-  var selectedChar = "obito"; // roster id chosen in char select
+  var selectedChar = "obito"; // roster id chosen in char select (solo)
+  var selectedL = null; // 2P left pick
+  var selectedR = null; // 2P right pick
+  var vsAssignSide = "L"; // which slot receives the next card click in 2P
   var charHover = -1;
+  var cardImgs = {};
+  (function loadCards() {
+    var ids = ["obito", "pain", "lockA", "lockB", "lockC", "lockD"];
+    var i;
+    for (i = 0; i < ids.length; i++) {
+      var img = new Image();
+      img.src = "cards/" + ids[i] + ".png?v=" + "pages12";
+      cardImgs[ids[i]] = img;
+    }
+  })();
   var roundIndex = 1;
   var roundWinsL = 0;
   var roundWinsR = 0;
@@ -99,7 +112,7 @@
   sharinganImg.src = "sharingan.png";
 
   // Bump when sprite PNGs change so browsers/CDN do not serve stale frames.
-  var ASSET_V = "pages10";
+  var ASSET_V = "pages12";
   function loadStrip(prefix, count, folder) {
     var arr = [];
     var i;
@@ -190,7 +203,7 @@
   }
 
   function boosted(f, amount) {
-    if (voidSpace && f.id === "L") return Math.round(amount * 1.5);
+    if (voidSpace && isObito(f)) return Math.round(amount * 1.5);
     return amount;
   }
   function lerp(a, b, t) { return a + (b - a) * t; }
@@ -259,6 +272,10 @@
     deep: "#1a1214",
     hot: "#ff8a3a"
   });
+  left.kit = "obito";
+  right.kit = "pain";
+  left.moveSpeed = 420;
+  right.moveSpeed = 336;
 
   left.skills = {
     punch: { key: "Q", name: "掌击", role: "突进", cd: 0, max: 0.7, cost: 0 },
@@ -278,6 +295,120 @@
 
   var leftOrder = ["punch", "phase", "tele", "breath", "space"];
   var rightOrder = ["thrust", "fire", "swap", "spike", "pull", "cleave"];
+
+  var KIT_DEFS = {
+    obito: {
+      name: "带土",
+      weapon: "blade",
+      speed: 420,
+      palette: { body: "#24315c", trim: "#e8e4f2", glow: "#9eb6ff", deep: "#14182c", hot: "#f0d2c0" },
+      order: ["punch", "phase", "tele", "breath", "space"],
+      skills: {
+        punch: { key: "Q", name: "掌击", role: "突进", cd: 0, max: 0.7, cost: 0 },
+        phase: { key: "E", name: "虚化", role: "灵体", cd: 0, max: 6, cost: 30 },
+        tele: { key: "R", name: "传送", role: "突进", cd: 0, max: 1.15, cost: 16 },
+        breath: { key: "F", name: "喷火", role: "远程", cd: 0, max: 1.7, cost: 22 },
+        space: { key: "C", name: "切空间", role: "空间", cd: 0, max: 0, cost: 0 }
+      }
+    },
+    pain: {
+      name: "橙发",
+      weapon: "spear",
+      speed: 336,
+      palette: { body: "#2c2428", trim: "#ff7a3a", glow: "#ffb067", deep: "#1a1214", hot: "#ff8a3a" },
+      order: ["thrust", "fire", "swap", "spike", "pull", "cleave"],
+      skills: {
+        thrust: { key: "U", name: "连击", role: "平A", cd: 0, max: 0.78, cost: 0 },
+        fire: { key: "I", name: "黑棒", role: "远程", cd: 0, max: 1.15, cost: 18 },
+        swap: { key: "O", name: "后撤", role: "闪避", cd: 0, max: 1.2, cost: 10 },
+        spike: { key: "P", name: "气盾", role: "绝技", cd: 0, max: 8, cost: 28 },
+        pull: { key: "J", name: "吸引", role: "控制", cd: 0, max: 2.6, cost: 18 },
+        cleave: { key: "K", name: "重脚", role: "平A", cd: 0, max: 0.9, cost: 8 }
+      }
+    }
+  };
+
+  function cloneSkills(src) {
+    var out = {};
+    var k;
+    for (k in src) {
+      out[k] = {
+        key: src[k].key,
+        name: src[k].name,
+        role: src[k].role,
+        cd: 0,
+        max: src[k].max,
+        cost: src[k].cost
+      };
+    }
+    return out;
+  }
+
+  function applySideKit(f, kitId) {
+    var def = KIT_DEFS[kitId];
+    if (!def) return;
+    f.kit = kitId;
+    f.name = def.name;
+    f.weapon = def.weapon;
+    f.palette = {
+      body: def.palette.body,
+      trim: def.palette.trim,
+      glow: def.palette.glow,
+      deep: def.palette.deep,
+      hot: def.palette.hot
+    };
+    f.skills = cloneSkills(def.skills);
+    f.moveSpeed = def.speed;
+    // Pain-only fields stay harmless on Obito
+    if (kitId === "pain") {
+      f.shield = f.shield || 0;
+      f.shieldKey = false;
+      f.shieldHit = false;
+      f.repulseOn = false;
+      f.repulseT = 0;
+      f.repulseLong = false;
+    }
+  }
+
+  function sideKeyLabels(side, orderLen) {
+    var keys = side === "L" ? ["Q", "E", "R", "F", "C", "V"] : ["U", "I", "O", "P", "J", "K"];
+    return keys.slice(0, orderLen);
+  }
+
+  function rebuildControlMap() {
+    var leftKeys = ["q", "e", "r", "f", "c", "v"];
+    var rightKeys = ["u", "i", "o", "p", "j", "k"];
+    var map = {};
+    var i, labels;
+    labels = sideKeyLabels("L", leftOrder.length);
+    for (i = 0; i < leftOrder.length; i++) {
+      map[leftKeys[i]] = ["L", leftOrder[i]];
+      if (left.skills[leftOrder[i]]) left.skills[leftOrder[i]].key = labels[i];
+    }
+    labels = sideKeyLabels("R", rightOrder.length);
+    for (i = 0; i < rightOrder.length; i++) {
+      map[rightKeys[i]] = ["R", rightOrder[i]];
+      if (right.skills[rightOrder[i]]) right.skills[rightOrder[i]].key = labels[i];
+    }
+    controlMap = map;
+  }
+
+  function applyMatchKits(kitL, kitR) {
+    applySideKit(left, kitL || "obito");
+    applySideKit(right, kitR || "pain");
+    leftOrder = KIT_DEFS[left.kit].order.slice();
+    rightOrder = KIT_DEFS[right.kit].order.slice();
+    rebuildControlMap();
+  }
+
+  function fighterByKit(kitId) {
+    if (left.kit === kitId) return left;
+    if (right.kit === kitId) return right;
+    return null;
+  }
+
+  function isObito(f) { return f && f.kit === "obito"; }
+  function isPain(f) { return f && f.kit === "pain"; }
 
   function other(f) { return f.id === "L" ? right : left; }
 
@@ -327,9 +458,9 @@
     projectiles.length = 0;
     spikes.length = 0;
     bursts.length = 0;
-    right.shield = 0;
-    right.shieldKey = false;
-    right.shieldHit = false;
+    left.shield = right.shield = 0;
+    left.shieldKey = right.shieldKey = false;
+    left.shieldHit = right.shieldHit = false;
     ghosts.length = 0;
     rings.length = 0;
     sparks.length = 0;
@@ -339,15 +470,15 @@
     shake = 0;
     koId = null;
     voidSpace = false;
-    right.armor = 0;
+    left.armor = right.armor = 0;
     phaseSlow = 0;
     left.rooted = right.rooted = 0;
     left.pullT = right.pullT = 0;
     left.pullFx = right.pullFx = 0;
     left.shieldWind = right.shieldWind = 0;
-    right.repulseOn = false;
-    right.repulseT = 0;
-    right.repulseLong = false;
+    left.repulseOn = right.repulseOn = false;
+    left.repulseT = right.repulseT = 0;
+    left.repulseLong = right.repulseLong = false;
   }
 
   function spawnFloater(x, y, text, color) {
@@ -590,6 +721,13 @@
   function goCharSelect() {
     matchState = "charSelect";
     paused = false;
+    if (gameMode === "vs") {
+      selectedL = null;
+      selectedR = null;
+      vsAssignSide = "L";
+    } else {
+      selectedChar = selectedChar || "obito";
+    }
     syncFlowHint();
   }
 
@@ -599,13 +737,61 @@
     else playerSide = "L";
   }
 
+  function vsCanConfirm() {
+    return !!(selectedL && selectedR && selectedL !== selectedR);
+  }
+
+  function pickVsCard(charId) {
+    var c = null;
+    var i;
+    for (i = 0; i < charRoster.length; i++) {
+      if (charRoster[i].id === charId) c = charRoster[i];
+    }
+    if (!c || !c.unlocked) return;
+    // Prefer distinct: if the other slot already has this id, move assign to free slot or swap.
+    if (vsAssignSide === "L") {
+      if (selectedR === charId) {
+        // swap into L, clear R later or leave R and force distinct on confirm
+        selectedL = charId;
+        selectedR = null;
+      } else {
+        selectedL = charId;
+      }
+      vsAssignSide = selectedR ? "L" : "R";
+    } else {
+      if (selectedL === charId) {
+        selectedR = charId;
+        selectedL = null;
+      } else {
+        selectedR = charId;
+      }
+      vsAssignSide = selectedL ? "R" : "L";
+    }
+    // After both filled distinctly, keep focus on L for re-picks
+    if (selectedL && selectedR && selectedL !== selectedR) vsAssignSide = "L";
+  }
+
   function beginMatch() {
     roundIndex = 1;
     roundWinsL = 0;
     roundWinsR = 0;
     matchWinner = null;
     matchResult = null;
-    if (gameMode === "vs") playerSide = "L"; // both human; sticks stay L/R
+    if (gameMode === "vs") {
+      playerSide = "L"; // both human; sticks stay L/R
+      applyMatchKits(selectedL || "obito", selectedR || "pain");
+    } else {
+      // Solo: player picks one unlocked kit; opponent gets the other unlocked kit.
+      var humanKit = selectedChar || "obito";
+      var aiKit = humanKit === "obito" ? "pain" : "obito";
+      if (humanKit === "pain") {
+        playerSide = "R";
+        applyMatchKits(aiKit, humanKit);
+      } else {
+        playerSide = "L";
+        applyMatchKits(humanKit, aiKit);
+      }
+    }
     beginCountdown();
   }
 
@@ -676,7 +862,7 @@
     if ((id === "phase" || id === "needle") && f.phase > 0) return;
     if ((f.chakra || 0) < (sk.cost || 0)) return;
     // Using any other Obito skill during 虚化 drops out of it right away.
-    if (f.id === "L" && f.phase > 0 && id !== "phase") endPhase(f);
+    if (isObito(f) && f.phase > 0 && id !== "phase") endPhase(f);
     if (id === "space" || id === "dash") {
       castSpace(f);
       f.chakra -= sk.cost || 0;
@@ -689,12 +875,12 @@
     if (id === "phase" || id === "needle") {
       castNeedle(f);
       f.chakra -= sk.cost || 0;
-      sk.cd = sk.max * ((voidSpace && f.id === "L") ? 0.65 : 1);
+      sk.cd = sk.max * ((voidSpace && isObito(f)) ? 0.65 : 1);
       return;
     }
     if (f.busy > 0 || f.dashT > 0) return;
     f.chakra -= sk.cost || 0;
-    sk.cd = sk.max * ((voidSpace && f.id === "L") ? 0.65 : 1);
+    sk.cd = sk.max * ((voidSpace && isObito(f)) ? 0.65 : 1);
     if (id === "punch") beginMelee(f, "punch", 0.56, 0.24);
     else if (id === "slash") beginMelee(f, "slash", 0.28, 0.08);
     else if (id === "thrust") beginMelee(f, "combo", 0.72, 0.22, 0.48);
@@ -747,7 +933,7 @@
   }
 
   function castNeedle(f) {
-    f.phase = (voidSpace && f.id === "L") ? 4.5 : 3;
+    f.phase = (voidSpace && isObito(f)) ? 4.5 : 3;
     f.phaseEye = 0;
     phaseSlow = 0.5;
     spawnFloater(f.x, f.y - 170, "无敌", "#d5dde4");
@@ -827,9 +1013,9 @@
     var dir = f.facing < 0 ? -1 : 1;
     ghosts.push({
       x: f.x, y: f.y, facing: f.facing, life: 0.28, max: 0.28,
-      palette: f.palette, weapon: f.weapon, owner: f.id
+      palette: f.palette, weapon: f.weapon, owner: f.id, kit: f.kit
     });
-    f.invuln = (voidSpace && f.id === "L") ? 0.4 : 0.25;
+    f.invuln = (voidSpace && isObito(f)) ? 0.4 : 0.25;
     var spot = clampSpot(f.x + dir * 1050, f.y);
     f.x = spot.x;
     f.y = spot.y;
@@ -975,7 +1161,7 @@
       ghosts.push({
         x: f.x + dir * gi * 48, y: f.y, facing: f.facing,
         life: 0.42 - gi * 0.08, max: 0.42,
-        palette: f.palette, weapon: f.weapon, owner: f.id,
+        palette: f.palette, weapon: f.weapon, owner: f.id, kit: f.kit,
         alpha: 0.78 - gi * 0.18
       });
     }
@@ -1023,7 +1209,8 @@
       right.x = b.x;
       right.y = b.y;
     }
-    if (!voidSpace && left.phase > 3) left.phase = 3;
+    var oKit = fighterByKit("obito");
+    if (!voidSpace && oKit && oKit.phase > 3) oKit.phase = 3;
     spawnFloater(f.x, f.y - 160, voidSpace ? "进入" : "返回", f.palette.glow);
   }
 
@@ -1158,7 +1345,7 @@
     }
     f.gait = "run";
     var len = Math.sqrt(ix * ix + iy * iy);
-    var speed = f.id === "L" ? 420 : 336;
+    var speed = f.moveSpeed || (isObito(f) ? 420 : 336);
     var step = clampSpot(f.x + ix / len * speed * dt, f.y + iy / len * speed * dt);
     f.x = step.x;
     f.y = step.y;
@@ -1201,7 +1388,7 @@
     if (f.busy > 0 || f.dashT > 0 || f.shield > 0 || f.shieldWind > 0) return;
     if (f.aiThink > 0) return;
     f.aiThink = 0.18 + Math.random() * 0.22;
-    if (f.id === "R") {
+    if (isPain(f)) {
       if (dist < 130 && f.skills.thrust.cd <= 0 && f.chakra >= (f.skills.thrust.cost || 0)) {
         tryCast(f, "thrust");
         return;
@@ -2106,7 +2293,7 @@
   }
 
   function drawGroundShadow(f) {
-    var body = f.id === "L" ? obitoScale : painScale;
+    var body = isObito(f) ? obitoScale : painScale;
     var lunging = f.anim === "punch" || f.anim === "tele" || f.anim === "breath" || f.anim === "thrust" || f.anim === "cleave" || f.anim === "slash" || f.anim === "dash" || f.anim === "swap" || f.anim === "combo" || f.anim === "kick" || f.anim === "rod" || f.anim === "push" || f.anim === "back";
     var rx = 32;
     var ry = 9;
@@ -2251,7 +2438,7 @@
   function drawFighter(f) {
 
     drawGroundShadow(f);
-    if (f.id === "L") {
+    if (isObito(f)) {
       drawObito(f);
       return;
     }
@@ -2283,11 +2470,11 @@
 
   function drawGhost(g) {
     var a = Math.max(0, g.life / g.max) * (g.alpha || 0.45);
-    if (g.owner === "L") {
+    if (g.kit === "obito" || (!g.kit && g.owner === "L")) {
       drawObitoAt(g.x, g.y, g.facing, obito.idle, 0, a);
       return;
     }
-    if (g.owner === "R") {
+    if (g.kit === "pain" || (!g.kit && g.owner === "R")) {
       drawPainAt(g.x, g.y, g.facing, pain.idle, 0, a);
       return;
     }
@@ -3210,7 +3397,7 @@
     ctx.fillText("选择对战模式", W / 2, 220);
     ctx.font = "16px sans-serif";
     ctx.fillStyle = "rgba(200,220,230,0.8)";
-    ctx.fillText("单人需再选角色；双人直接开打（带土 vs 橙发）", W / 2, 258);
+    ctx.fillText("单人 / 双人都需选角；双人左右各选一名（不可相同）", W / 2, 258);
     flowButton(W / 2 - 220, 300, 200, 74, "单人 · 人机", true, function () {
       gameMode = "ai";
       goCharSelect();
@@ -3218,12 +3405,178 @@
     flowButton(W / 2 + 20, 300, 200, 74, "双人", true, function () {
       gameMode = "vs";
       playerSide = "L";
-      beginMatch();
+      goCharSelect();
     });
     flowButton(W / 2 - 90, 420, 180, 44, "返回介绍", false, function () { goIntro(); });
   }
 
-  function drawCharSelectScreen() {
+  function rosterById(id) {
+    var i;
+    for (i = 0; i < charRoster.length; i++) if (charRoster[i].id === id) return charRoster[i];
+    return null;
+  }
+
+  function drawPortraitCard(x, y, w, h, c, selected, dimmed) {
+    ctx.save();
+    roundRect(x, y, w, h, 14);
+    if (!c.unlocked) ctx.fillStyle = "rgba(28,30,36,0.94)";
+    else if (selected) ctx.fillStyle = "rgba(18,46,50,0.96)";
+    else ctx.fillStyle = "rgba(245,247,250,0.96)";
+    ctx.fill();
+    ctx.lineWidth = selected ? 3.5 : 2;
+    ctx.strokeStyle = !c.unlocked ? "rgba(90,90,100,0.45)" : (selected ? "#3ef0e0" : "rgba(40,50,70,0.35)");
+    ctx.stroke();
+
+    var img = cardImgs[c.id];
+    var imgH = h - 58;
+    var imgW = w - 20;
+    var ix = x + 10;
+    var iy = y + 10;
+    if (img && img.complete && img.naturalWidth > 0) {
+      var iw = img.naturalWidth;
+      var ih = img.naturalHeight;
+      var sc = Math.min(imgW / iw, imgH / ih);
+      var dw = iw * sc;
+      var dh = ih * sc;
+      var dx = x + (w - dw) / 2;
+      var dy = y + 10 + (imgH - dh);
+      if (!c.unlocked || dimmed) ctx.globalAlpha = 0.35;
+      ctx.drawImage(img, dx, dy, dw, dh);
+      ctx.globalAlpha = 1;
+    } else if (c.unlocked) {
+      var pal = (KIT_DEFS[c.id] && KIT_DEFS[c.id].palette) || { body: "#444", glow: "#aaa" };
+      ctx.beginPath();
+      ctx.arc(x + w / 2, y + h * 0.38, Math.min(w, h) * 0.16, 0, Math.PI * 2);
+      ctx.fillStyle = pal.body;
+      ctx.fill();
+      ctx.strokeStyle = pal.glow;
+      ctx.lineWidth = 3;
+      ctx.stroke();
+    }
+
+    if (!c.unlocked) {
+      ctx.fillStyle = "rgba(20,20,28,0.55)";
+      roundRect(x + 4, y + 4, w - 8, h - 8, 12);
+      ctx.fill();
+      ctx.fillStyle = "rgba(200,200,210,0.85)";
+      ctx.font = "bold 22px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(c.name, x + w / 2, y + h * 0.46);
+      ctx.font = "bold 14px sans-serif";
+      ctx.fillStyle = "rgba(180,180,190,0.8)";
+      ctx.fillText("即将开放", x + w / 2, y + h * 0.58);
+    } else {
+      ctx.fillStyle = selected ? "#041018" : "#14202c";
+      roundRect(x + 8, y + h - 42, w - 16, 30, 8);
+      ctx.fill();
+      ctx.font = "bold 16px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillStyle = selected ? "#3ef0e0" : "#f4fbff";
+      ctx.fillText(c.name, x + w / 2, y + h - 21);
+    }
+    ctx.restore();
+  }
+
+  function drawVsSlot(x, y, w, h, side, pickId) {
+    var active = vsAssignSide === side;
+    var c = pickId ? rosterById(pickId) : null;
+    ctx.save();
+    roundRect(x, y, w, h, 16);
+    ctx.fillStyle = active ? "rgba(20,48,52,0.95)" : "rgba(12,16,24,0.92)";
+    ctx.fill();
+    ctx.lineWidth = active ? 3 : 2;
+    ctx.strokeStyle = active ? "#3ef0e0" : "rgba(140,170,190,0.35)";
+    ctx.stroke();
+    ctx.textAlign = "center";
+    ctx.font = "bold 18px sans-serif";
+    ctx.fillStyle = "#f4fbff";
+    ctx.fillText(side === "L" ? "左侧 · P1" : "右侧 · P2", x + w / 2, y + 28);
+    ctx.font = "13px sans-serif";
+    ctx.fillStyle = "rgba(190,210,220,0.75)";
+    ctx.fillText(side === "L" ? "WASD · 左摇杆" : "方向键 · 右摇杆", x + w / 2, y + 50);
+
+    if (c) {
+      var img = cardImgs[c.id];
+      var boxY = y + 64;
+      var boxH = h - 100;
+      var boxW = w - 36;
+      var boxX = x + 18;
+      roundRect(boxX, boxY, boxW, boxH, 12);
+      ctx.fillStyle = "#ffffff";
+      ctx.fill();
+      if (img && img.complete && img.naturalWidth > 0) {
+        var sc = Math.min((boxW - 12) / img.naturalWidth, (boxH - 36) / img.naturalHeight);
+        var dw = img.naturalWidth * sc;
+        var dh = img.naturalHeight * sc;
+        ctx.drawImage(img, boxX + (boxW - dw) / 2, boxY + boxH - 28 - dh, dw, dh);
+      }
+      ctx.font = "bold 20px sans-serif";
+      ctx.fillStyle = "#14202c";
+      ctx.fillText(c.name, x + w / 2, y + h - 18);
+    } else {
+      ctx.font = "bold 22px sans-serif";
+      ctx.fillStyle = active ? "#3ef0e0" : "rgba(160,180,200,0.55)";
+      ctx.fillText(active ? "点选中央角色卡" : "等待选择", x + w / 2, y + h * 0.55);
+    }
+    ctx.restore();
+    addHit(x, y, w, h, (function (s) {
+      return function () { vsAssignSide = s; };
+    })(side));
+  }
+
+  function drawVsCharSelectScreen() {
+    panelBox(40, 40, W - 80, H - 80);
+    ctx.textAlign = "center";
+    ctx.font = "bold 32px sans-serif";
+    ctx.fillStyle = "#f4fbff";
+    ctx.fillText("双人选角", W / 2, 88);
+    ctx.font = "15px sans-serif";
+    ctx.fillStyle = "rgba(200,220,230,0.85)";
+    ctx.fillText("先点左侧或右侧框，再点中央角色卡；两边必须选不同角色", W / 2, 116);
+
+    var slotW = 210;
+    var slotH = 420;
+    drawVsSlot(56, 140, slotW, slotH, "L", selectedL);
+    drawVsSlot(W - 56 - slotW, 140, slotW, slotH, "R", selectedR);
+
+    var cols = 3;
+    var cardW = 150;
+    var cardH = 220;
+    var gapX = 18;
+    var gapY = 16;
+    var gridW = cols * cardW + (cols - 1) * gapX;
+    var startX = (W - gridW) / 2;
+    var startY = 150;
+    var i;
+    for (i = 0; i < charRoster.length; i++) {
+      var c = charRoster[i];
+      var col = i % cols;
+      var row = Math.floor(i / cols);
+      var x = startX + col * (cardW + gapX);
+      var y = startY + row * (cardH + gapY);
+      var taken = (selectedL === c.id) || (selectedR === c.id);
+      var selected = taken;
+      drawPortraitCard(x, y, cardW, cardH, c, selected, false);
+      if (c.unlocked) {
+        addHit(x, y, cardW, cardH, (function (cid) {
+          return function () { pickVsCard(cid); };
+        })(c.id));
+      }
+    }
+
+    var can = vsCanConfirm();
+    ctx.font = "14px sans-serif";
+    ctx.fillStyle = can ? "rgba(180,255,220,0.9)" : "rgba(255,180,140,0.9)";
+    ctx.fillText(can ? "双方已选不同角色，可以开始" : "请为左右各选一名不同角色", W / 2, H - 92);
+
+    flowButton(40, H - 70, 140, 42, "返回", false, function () { goMode(); });
+    flowButton(W / 2 - 110, H - 78, 220, 52, "开始对战", can, function () {
+      if (!vsCanConfirm()) return;
+      beginMatch();
+    });
+  }
+
+  function drawSoloCharSelectScreen() {
     panelBox(70, 70, W - 140, H - 140);
     ctx.textAlign = "center";
     ctx.font = "bold 34px sans-serif";
@@ -3234,13 +3587,13 @@
     ctx.fillText("已解锁 2 人，其余即将开放。对手自动是另一位解锁角色。", W / 2, 150);
 
     var cols = 3;
-    var cardW = 250;
-    var cardH = 168;
-    var gapX = 28;
-    var gapY = 22;
+    var cardW = 200;
+    var cardH = 280;
+    var gapX = 24;
+    var gapY = 20;
     var gridW = cols * cardW + (cols - 1) * gapX;
     var startX = (W - gridW) / 2;
-    var startY = 180;
+    var startY = 175;
     var i;
     for (i = 0; i < charRoster.length; i++) {
       var c = charRoster[i];
@@ -3248,39 +3601,9 @@
       var row = Math.floor(i / cols);
       var x = startX + col * (cardW + gapX);
       var y = startY + row * (cardH + gapY);
-      var unlocked = c.unlocked;
-      var selected = unlocked && selectedChar === c.id;
-      ctx.save();
-      roundRect(x, y, cardW, cardH, 14);
-      if (!unlocked) ctx.fillStyle = "rgba(28,30,36,0.92)";
-      else if (selected) ctx.fillStyle = "rgba(20,48,52,0.95)";
-      else ctx.fillStyle = "rgba(14,18,26,0.95)";
-      ctx.fill();
-      ctx.lineWidth = selected ? 3 : 2;
-      ctx.strokeStyle = !unlocked ? "rgba(90,90,100,0.45)" : (selected ? "#3ef0e0" : "rgba(140,170,190,0.4)");
-      ctx.stroke();
-      if (!unlocked) {
-        ctx.fillStyle = "rgba(120,120,130,0.55)";
-        ctx.font = "bold 28px sans-serif";
-        ctx.fillText(c.name, x + cardW / 2, y + 70);
-        ctx.font = "bold 16px sans-serif";
-        ctx.fillStyle = "rgba(180,180,190,0.7)";
-        ctx.fillText("即将开放", x + cardW / 2, y + 108);
-      } else {
-        var pal = c.id === "obito" ? left.palette : right.palette;
-        ctx.beginPath();
-        ctx.arc(x + cardW / 2, y + 58, 28, 0, Math.PI * 2);
-        ctx.fillStyle = pal.body;
-        ctx.fill();
-        ctx.strokeStyle = pal.glow;
-        ctx.lineWidth = 3;
-        ctx.stroke();
-        ctx.font = "bold 26px sans-serif";
-        ctx.fillStyle = "#f4fbff";
-        ctx.fillText(c.name, x + cardW / 2, y + 112);
-        ctx.font = "14px sans-serif";
-        ctx.fillStyle = pal.trim;
-        ctx.fillText(c.blurb, x + cardW / 2, y + 140);
+      var selected = c.unlocked && selectedChar === c.id;
+      drawPortraitCard(x, y, cardW, cardH, c, selected, false);
+      if (c.unlocked) {
         addHit(x, y, cardW, cardH, (function (cid) {
           return function () {
             applyPlayerPick(cid);
@@ -3288,9 +3611,13 @@
           };
         })(c.id));
       }
-      ctx.restore();
     }
     flowButton(40, H - 70, 140, 42, "返回", false, function () { goMode(); });
+  }
+
+  function drawCharSelectScreen() {
+    if (gameMode === "vs") drawVsCharSelectScreen();
+    else drawSoloCharSelectScreen();
   }
 
   function drawHud() {
@@ -3446,6 +3773,7 @@
       else drawOneProjectile(batch[gi].who);
     }
     drawBursts();
+    if (left.shield > 0 && !left.repulseOn) drawAirShield(left);
     if (right.shield > 0 && !right.repulseOn) drawAirShield(right);
     drawPullStreams(left);
     drawPullStreams(right);
@@ -3527,6 +3855,11 @@
     k: ["R", "cleave"]
   };
 
+  function mappedSkillRelease(k) {
+    var m = controlMap[k];
+    return m ? m[1] : null;
+  }
+
   function isArrowKey(key) {
     return key === "ArrowUp" || key === "ArrowDown" || key === "ArrowLeft" || key === "ArrowRight";
   }
@@ -3581,7 +3914,7 @@
     keysDown[k] = true;
     var caster = mapped[0] === "L" ? left : right;
     if (!humanControls(caster)) return;
-    if (mapped[1] === "spike") shieldPressDown(right);
+    if (mapped[1] === "spike") shieldPressDown(caster);
     else tryCast(caster, mapped[1]);
   });
 
@@ -3599,11 +3932,15 @@
       return;
     }
     var k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-    if (k === "p") shieldPressUp(right);
+    if (mappedSkillRelease(k) === "spike") {
+      var rel = controlMap[k];
+      if (rel) shieldPressUp(rel[0] === "L" ? left : right);
+    }
     keysDown[k] = false;
   });
 
   window.addEventListener("blur", function () {
+    shieldPressUp(left);
     shieldPressUp(right);
     var key;
     for (key in keysDown) keysDown[key] = false;
@@ -3738,12 +4075,13 @@
         return;
       }
     }
-    if (paused || matchState !== "fight" || koId || right.armor <= 0) return;
-    if (gameMode === "ai" && playerSide !== "R") return;
+    var swordF = fighterByKit("pain");
+    if (!swordF || paused || matchState !== "fight" || koId || swordF.armor <= 0) return;
+    if (gameMode === "ai" && swordF.id !== playerSide) return;
     var mx = pt.x;
     var my = pt.y;
-    var x0 = right.x;
-    var y0 = right.y - 78;
+    var x0 = swordF.x;
+    var y0 = swordF.y - 78;
     var dx = mx - x0;
     var dy = my - y0;
     var len = Math.sqrt(dx * dx + dy * dy) || 1;
