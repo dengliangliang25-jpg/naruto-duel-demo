@@ -93,7 +93,7 @@
   sharinganImg.src = "sharingan.png";
 
   // Bump when sprite PNGs change so browsers/CDN do not serve stale frames.
-  var ASSET_V = "pages3";
+  var ASSET_V = "pages4";
   function loadStrip(prefix, count, folder) {
     var arr = [];
     var i;
@@ -820,7 +820,7 @@
     if (f.id === "L") f.gait = "run";
     else f.gait = "run";
     var len = Math.sqrt(ix * ix + iy * iy);
-    var speed = f.id === "L" ? 880 : 700;
+    var speed = f.id === "L" ? 660 : 525;
     var step = clampSpot(f.x + ix / len * speed * dt, f.y + iy / len * speed * dt);
     f.x = step.x;
     f.y = step.y;
@@ -1494,7 +1494,8 @@
 
   function drawObito(f) {
     var set = obito.idle;
-    var idx = Math.floor(time * 6) % 8;
+    // Idle stays on frame 0 so feet stay planted (no strip bob / foot skating).
+    var idx = 0;
     var alpha = 1;
     if (f.anim === "tele") {
       set = obito.tele;
@@ -1515,7 +1516,7 @@
       idx = Math.floor(time * 8.4) % 8;
     } else {
       set = obito.idle;
-      idx = Math.floor(time * 6) % 8;
+      idx = 0;
     }
     var phased = f.phase > 0;
     if (phased) alpha = 0.45;
@@ -1615,7 +1616,8 @@
       if (drawPainRepulse(f.x, f.y, f.facing, ridx, 1)) return;
     }
     var set = pain.idle;
-    var idx = Math.floor(time * 5) % 6;
+    // Idle stays on frame 0 so feet stay planted (no strip bob / foot skating).
+    var idx = 0;
     var alpha = 1;
     if (f.anim === "combo" || f.anim === "kick" || f.anim === "rod" || f.anim === "push" || f.anim === "back") {
       if (f.anim === "combo") set = pain.combo;
@@ -1632,7 +1634,7 @@
       idx = Math.floor(time * 8.4) % 6;
     } else {
       set = pain.idle;
-      idx = Math.floor(time * 5) % 6;
+      idx = 0;
     }
     if (f.invuln > 0 && Math.sin(time * 40) > 0) alpha *= 0.45;
     drawPainAt(f.x, f.y, f.facing, set, idx, alpha);
