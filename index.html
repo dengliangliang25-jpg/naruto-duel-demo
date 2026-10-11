@@ -31,6 +31,31 @@
     z-index: 2;
   }
   #gate.hidden { display: none; }
+  #gateInner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    pointer-events: auto;
+  }
+  #modeRow {
+    display: flex;
+    gap: 12px;
+  }
+  .modeBtn {
+    font: bold 16px "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+    color: #c8d4dc;
+    background: rgba(8, 12, 18, 0.85);
+    border: 2px solid #3a4a55;
+    border-radius: 10px;
+    padding: 10px 28px;
+    cursor: pointer;
+  }
+  .modeBtn.active {
+    color: #f4fbff;
+    border-color: #3ef0e0;
+    box-shadow: 0 0 12px rgba(62, 240, 224, 0.35);
+  }
   #startBtn {
     pointer-events: auto;
     font: bold 22px "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
@@ -46,7 +71,15 @@
 </head>
 <body>
 <canvas id="arena" width="1280" height="720"></canvas>
-<div id="gate"><button id="startBtn" type="button">开始游戏</button></div>
+<div id="gate">
+  <div id="gateInner">
+    <div id="modeRow">
+      <button id="modeAi" class="modeBtn active" type="button">人机</button>
+      <button id="modeVs" class="modeBtn" type="button">双人</button>
+    </div>
+    <button id="startBtn" type="button">开始游戏</button>
+  </div>
+</div>
 <script>
 (function () {
   "use strict";
@@ -70,6 +103,12 @@
   var countLeft = 3;
   var matchTime = 60;
   var matchResult = null;
+  var gameMode = "ai";
+  var roundIndex = 1;
+  var roundWinsL = 0;
+  var roundWinsR = 0;
+  var roundEndLeft = 0;
+  var matchWinner = null;
   var paused = false;
   var simSpeed = 1;
   var phaseSlow = 0;
@@ -93,7 +132,7 @@
   sharinganImg.src = "sharingan.png";
 
   // Bump when sprite PNGs change so browsers/CDN do not serve stale frames.
-  var ASSET_V = "pages5";
+  var ASSET_V = "pages6";
   function loadStrip(prefix, count, folder) {
     var arr = [];
     var i;
@@ -213,8 +252,12 @@
       flash: 0,
       invuln: 0,
       hurt: 0,
+      stun: 0,
       phase: 0,
       armor: 0,
+      aiIx: 0,
+      aiIy: 0,
+      aiThink: 0,
       skills: {}
     };
   }
@@ -274,7 +317,11 @@
     left.invuln = right.invuln = 0;
     left.phase = right.phase = 0;
     left.hurt = right.hurt = 0;
+    left.stun = right.stun = 0;
     left.hitPending = right.hitPending = false;
+    left.aiIx = right.aiIx = 0;
+    left.aiIy = right.aiIy = 0;
+    left.aiThink = right.aiThink = 0;
     var k;
     for (k in left.skills) left.skills[k].cd = 0;
     for (k in right.skills) right.skills[k].cd = 0;
@@ -313,8 +360,18 @@
     target.hp = Math.max(0, target.hp - amount);
     target.flash = 0.16;
     target.hurt = 0.14;
+    var stunDur = 0.08 + amount * 0.035;
+    if (stunDur > 0.85) stunDur = 0.85;
+    target.stun = Math.max(target.stun || 0, stunDur);
+    target.busy = 0;
+    target.dashT = 0;
+    target.anim = "idle";
+    target.hitPending = false;
+    target.hitPending2 = false;
+    target.teleBlinked = false;
     shake = Math.min(10, shake + 3.2);
     spawnFloater(target.x + (Math.random() * 16 - 8), target.y - 148, String(amount), color);
+    spawnFloater(target.x + (Math.random() * 10 - 5), target.y - 178, "僵直", "#ffe7a0");
     var i;
     for (i = 0; i < 8; i++) {
       sparks.push({
@@ -329,21 +386,46 @@
     }
     if (target.hp <= 0) {
       koId = target.id === "L" ? "R" : "L";
-      finishMatch(koId);
+      finishRound(koId);
     }
     return true;
   }
 
   function syncGate() {
+    var modeRow = document.getElementById("modeRow");
     if (matchState === "menu") {
       startBtn.textContent = "开始游戏";
       gate.classList.remove("hidden");
+      if (modeRow) modeRow.style.display = "flex";
     } else if (matchState === "result") {
       startBtn.textContent = "再来一局";
       gate.classList.remove("hidden");
+      if (modeRow) modeRow.style.display = "flex";
     } else {
       gate.classList.add("hidden");
     }
+  }
+
+  function syncModeButtons() {
+    var aiBtn = document.getElementById("modeAi");
+    var vsBtn = document.getElementById("modeVs");
+    if (!aiBtn || !vsBtn) return;
+    if (gameMode === "ai") {
+      aiBtn.classList.add("active");
+      vsBtn.classList.remove("active");
+    } else {
+      vsBtn.classList.add("active");
+      aiBtn.classList.remove("active");
+    }
+  }
+
+  function beginMatch() {
+    roundIndex = 1;
+    roundWinsL = 0;
+    roundWinsR = 0;
+    matchWinner = null;
+    matchResult = null;
+    beginCountdown();
   }
 
   function beginCountdown() {
@@ -352,7 +434,9 @@
     countLeft = 3;
     matchTime = 60;
     matchResult = null;
+    koId = null;
     paused = false;
+    roundEndLeft = 0;
     syncGate();
   }
 
@@ -360,17 +444,35 @@
     if (matchState === "result") return;
     matchState = "result";
     matchResult = result;
+    matchWinner = result;
+    syncGate();
+  }
+
+  function finishRound(result) {
+    if (matchState !== "fight") return;
+    matchResult = result;
+    if (result === "L") roundWinsL += 1;
+    else if (result === "R") roundWinsR += 1;
+    if (roundWinsL >= 2 || roundWinsR >= 2 || roundIndex >= 3) {
+      var final = "draw";
+      if (roundWinsL > roundWinsR) final = "L";
+      else if (roundWinsR > roundWinsL) final = "R";
+      finishMatch(final);
+      return;
+    }
+    matchState = "roundEnd";
+    roundEndLeft = 2.2;
     syncGate();
   }
 
   function endByTime() {
-    if (left.hp > right.hp) finishMatch("L");
-    else if (right.hp > left.hp) finishMatch("R");
-    else finishMatch("draw");
+    if (left.hp > right.hp) finishRound("L");
+    else if (right.hp > left.hp) finishRound("R");
+    else finishRound("draw");
   }
 
   function tryCast(f, id) {
-    if (paused || matchState !== "fight" || koId) return;
+    if (paused || matchState !== "fight" || koId || (f.stun || 0) > 0) return;
     var sk = f.skills[id];
     if (!sk || sk.cd > 0) return;
     if ((id === "phase" || id === "needle") && f.phase > 0) return;
@@ -526,7 +628,7 @@
       palette: f.palette, weapon: f.weapon, owner: f.id
     });
     f.invuln = (voidSpace && f.id === "L") ? 0.4 : 0.25;
-    var spot = clampSpot(f.x + dir * 680, f.y);
+    var spot = clampSpot(f.x + dir * 1050, f.y);
     f.x = spot.x;
     f.y = spot.y;
     var opp = other(f);
@@ -599,7 +701,7 @@
   }
 
   function castShield(f, dur) {
-    if (paused || matchState !== "fight" || koId) return false;
+    if (paused || matchState !== "fight" || koId || (f.stun || 0) > 0) return false;
     var sk = f.skills.spike;
     if (!sk || sk.cd > 0 || f.shield > 0 || f.shieldWind > 0) return false;
     if (f.busy > 0 || f.dashT > 0) return false;
@@ -676,7 +778,7 @@
       });
     }
     f.invuln = 0.28;
-    var spot = clampSpot(f.x + dir * 200, f.y);
+    var spot = clampSpot(f.x + dir * 340, f.y);
     f.x = spot.x;
     f.y = spot.y;
     f.anim = "back";
@@ -793,7 +895,7 @@
   }
 
   function walkFighter(f, dt) {
-    if (f.rooted > 0 || f.pullT > 0) {
+    if (f.rooted > 0 || f.pullT > 0 || (f.stun || 0) > 0) {
       f.gait = "idle";
       return;
     }
@@ -806,6 +908,9 @@
       if (keysDown.s) iy += 1;
       ix += sticks[0].nx;
       iy += sticks[0].ny;
+    } else if (gameMode === "ai") {
+      ix = f.aiIx || 0;
+      iy = f.aiIy || 0;
     } else {
       if (keysDown.ArrowLeft) ix -= 1;
       if (keysDown.ArrowRight) ix += 1;
@@ -820,13 +925,75 @@
       f.gait = "idle";
       return;
     }
-    if (f.id === "L") f.gait = "run";
-    else f.gait = "run";
+    f.gait = "run";
     var len = Math.sqrt(ix * ix + iy * iy);
-    var speed = f.id === "L" ? 528 : 420;
+    var speed = f.id === "L" ? 420 : 336;
     var step = clampSpot(f.x + ix / len * speed * dt, f.y + iy / len * speed * dt);
     f.x = step.x;
     f.y = step.y;
+  }
+
+  function updateAI(dt) {
+    if (gameMode !== "ai" || matchState !== "fight" || koId) return;
+    var f = right;
+    var opp = left;
+    if ((f.stun || 0) > 0 || f.rooted > 0 || f.pullT > 0) {
+      f.aiIx = 0;
+      f.aiIy = 0;
+      return;
+    }
+    var dx = opp.x - f.x;
+    var dy = opp.y - f.y;
+    var dist = Math.sqrt(dx * dx + dy * dy) || 1;
+    if (dx < 0) f.facing = -1;
+    else if (dx > 0) f.facing = 1;
+    f.aiThink = (f.aiThink || 0) - dt;
+    var wantX = 0;
+    var wantY = 0;
+    var ideal = 118;
+    if (dist > ideal + 28) {
+      wantX = dx / dist;
+      wantY = dy / dist * 0.55;
+    } else if (dist < ideal - 36) {
+      wantX = -dx / dist;
+      wantY = -dy / dist * 0.35;
+    } else {
+      wantY = (dy > 18 ? 0.35 : (dy < -18 ? -0.35 : 0));
+      if (Math.abs(dy) < 12 && Math.random() < 0.01) wantX = (Math.random() < 0.5 ? -0.2 : 0.2);
+    }
+    if (opp.phase > 0 && dist < 160) {
+      wantX = -dx / dist;
+      wantY = (Math.random() - 0.5) * 0.4;
+    }
+    f.aiIx = wantX;
+    f.aiIy = wantY;
+    if (f.busy > 0 || f.dashT > 0 || f.shield > 0 || f.shieldWind > 0) return;
+    if (f.aiThink > 0) return;
+    f.aiThink = 0.18 + Math.random() * 0.22;
+    if (dist < 130 && f.skills.thrust.cd <= 0 && f.chakra >= (f.skills.thrust.cost || 0)) {
+      tryCast(f, "thrust");
+      return;
+    }
+    if (dist < 150 && f.skills.cleave.cd <= 0 && f.chakra >= (f.skills.cleave.cost || 0) && Math.random() < 0.55) {
+      tryCast(f, "cleave");
+      return;
+    }
+    if (dist > 160 && dist < 520 && f.skills.fire.cd <= 0 && f.chakra >= (f.skills.fire.cost || 0) && Math.random() < 0.45) {
+      tryCast(f, "fire");
+      return;
+    }
+    if (dist < 110 && f.skills.swap.cd <= 0 && f.chakra >= (f.skills.swap.cost || 0) && Math.random() < 0.35) {
+      tryCast(f, "swap");
+      return;
+    }
+    if (dist > 90 && dist < 420 && f.skills.pull.cd <= 0 && f.chakra >= (f.skills.pull.cost || 0) && Math.random() < 0.28) {
+      tryCast(f, "pull");
+      return;
+    }
+    if (dist < 150 && f.skills.spike.cd <= 0 && f.chakra >= (f.skills.spike.cost || 0) && Math.random() < 0.18) {
+      tryCast(f, "spike");
+      return;
+    }
   }
 
   function update(dt) {
@@ -922,6 +1089,7 @@
         }
       }
       if (f.hurt > 0) f.hurt = Math.max(0, f.hurt - dt);
+      if (f.stun > 0) f.stun = Math.max(0, f.stun - dt);
       if (f.busy > 0) f.busy = Math.max(0, f.busy - dt);
 
       if (f.dashT > 0) {
@@ -954,7 +1122,7 @@
       } else {
         if (!koId && f.busy <= 0) walkFighter(f, dt);
         else if (!koId && f.anim === "punch" && f.animT < f.animDur * 0.45) {
-          var lunge = clampSpot(f.x + f.facing * 370 * dt, f.y);
+          var lunge = clampSpot(f.x + f.facing * 560 * dt, f.y);
           f.x = lunge.x;
           f.y = lunge.y;
         }
@@ -1515,10 +1683,10 @@
       idx = Math.floor(u * 8);
     } else if (f.gait === "run" || f.gait === "walk") {
       set = obito.run;
-      idx = Math.floor(time * 8.4) % 8;
+      idx = Math.floor(time * 11) % 8;
     } else {
       set = obito.idle;
-      idx = Math.floor(time * 4.5) % 8;
+      idx = 0;
     }
     var phased = f.phase > 0;
     if (phased) alpha = 0.45;
@@ -1636,10 +1804,10 @@
       idx = Math.floor(u * 6);
     } else if (f.gait === "run" || f.gait === "walk") {
       set = pain.run;
-      idx = Math.floor(time * 8.4) % 6;
+      idx = Math.floor(time * 11) % 6;
     } else {
       set = pain.idle;
-      idx = Math.floor(time * 4.5) % 6;
+      idx = 0;
     }
     if (f.invuln > 0 && Math.sin(time * 40) > 0) alpha *= 0.45;
     var footDrop = 0;
@@ -2373,7 +2541,11 @@
       ctx.fill();
     }
     ctx.restore();
-    addHit(cx - r, cy - r, r * 2, r * 2, function () { tryCast(f, id); });
+    addHit(cx - r, cy - r, r * 2, r * 2, function () {
+      if (f.id === "R" && gameMode === "ai") return;
+      if (id === "spike") shieldPressDown(f);
+      else tryCast(f, id);
+    });
   }
 
   function drawPauseButton(cx, cy) {
@@ -2411,18 +2583,21 @@
 
   function drawTimer() {
     var secs = 60;
-    if (matchState === "fight" || matchState === "result") secs = Math.ceil(matchTime);
+    if (matchState === "fight" || matchState === "result" || matchState === "roundEnd") secs = Math.ceil(matchTime);
     if (secs < 0) secs = 0;
     ctx.textAlign = "center";
     ctx.font = "bold 16px sans-serif";
     ctx.fillStyle = "#e4453a";
-    ctx.fillText("第1回", W / 2, 22);
-    ctx.font = "bold 58px sans-serif";
+    ctx.fillText("第" + roundIndex + "回", W / 2, 22);
+    ctx.font = "bold 14px sans-serif";
+    ctx.fillStyle = "#f4efe6";
+    ctx.fillText(roundWinsL + " : " + roundWinsR, W / 2, 40);
+    ctx.font = "bold 52px sans-serif";
     ctx.lineWidth = 7;
     ctx.strokeStyle = "rgba(48, 18, 12, 0.88)";
-    ctx.strokeText(String(secs), W / 2, 82);
+    ctx.strokeText(String(secs), W / 2, 92);
     ctx.fillStyle = (matchState === "fight" && secs <= 10) ? "#ffb067" : "#fff8f0";
-    ctx.fillText(String(secs), W / 2, 82);
+    ctx.fillText(String(secs), W / 2, 92);
   }
 
   function drawHud() {
@@ -2476,6 +2651,9 @@
       var n = Math.ceil(countLeft - 0.0001);
       if (n < 1) n = 1;
       ctx.textAlign = "center";
+      ctx.font = "bold 28px sans-serif";
+      ctx.fillStyle = "#f4efe6";
+      ctx.fillText("第" + roundIndex + "回  " + roundWinsL + ":" + roundWinsR, W / 2, H / 2 - 70);
       ctx.font = "bold 120px sans-serif";
       ctx.fillStyle = "#f4fbff";
       ctx.strokeStyle = "rgba(20,12,10,0.65)";
@@ -2483,23 +2661,39 @@
       ctx.strokeText(String(n), W / 2, H / 2 + 24);
       ctx.fillText(String(n), W / 2, H / 2 + 24);
     }
+    if (matchState === "roundEnd") {
+      var rw = matchResult === "L" ? left : (matchResult === "R" ? right : null);
+      ctx.fillStyle = "rgba(0,0,0,0.45)";
+      ctx.fillRect(W / 2 - 220, H / 2 - 78, 440, 130);
+      ctx.textAlign = "center";
+      ctx.font = "bold 42px sans-serif";
+      if (!rw) {
+        ctx.fillStyle = "#e8eef2";
+        ctx.fillText("本回平局", W / 2, H / 2 - 12);
+      } else {
+        ctx.fillStyle = rw.palette.glow;
+        ctx.fillText(rw.name + " 赢下本回", W / 2, H / 2 - 12);
+      }
+      ctx.font = "18px sans-serif";
+      ctx.fillStyle = "#e8eef2";
+      ctx.fillText("比分 " + roundWinsL + " : " + roundWinsR + "    下一回准备中", W / 2, H / 2 + 28);
+    }
     if (matchState === "result") {
       var winner = matchResult === "L" ? left : (matchResult === "R" ? right : null);
       ctx.fillStyle = "rgba(0,0,0,0.45)";
-      ctx.fillRect(W / 2 - 200, H / 2 - 78, 400, 130);
+      ctx.fillRect(W / 2 - 220, H / 2 - 90, 440, 150);
       ctx.textAlign = "center";
-      ctx.font = "bold 54px sans-serif";
+      ctx.font = "bold 48px sans-serif";
       if (!winner) {
         ctx.fillStyle = "#e8eef2";
-        ctx.fillText("平局", W / 2, H / 2 - 8);
+        ctx.fillText("平局", W / 2, H / 2 - 18);
       } else {
         ctx.fillStyle = winner.palette.glow;
-        ctx.fillText(koId ? "击倒" : "时间到", W / 2, H / 2 - 8);
+        ctx.fillText(winner.name + " 获胜", W / 2, H / 2 - 18);
       }
-      ctx.font = "16px sans-serif";
+      ctx.font = "18px sans-serif";
       ctx.fillStyle = "#e8eef2";
-      var line = winner ? (winner.name + " 获胜") : "双方血量相同";
-      ctx.fillText(line + "    按 Enter 再来一局", W / 2, H / 2 + 28);
+      ctx.fillText("三局两胜  " + roundWinsL + " : " + roundWinsR + "    按 Enter 再来一局", W / 2, H / 2 + 28);
     }
     ctx.textAlign = "left";
   }
@@ -2573,8 +2767,20 @@
         matchTime = 60;
         syncGate();
       }
+    } else if (matchState === "roundEnd") {
+      if (step > 0) {
+        time += step;
+        roundEndLeft -= step;
+        if (roundEndLeft <= 0) {
+          roundIndex += 1;
+          beginCountdown();
+        }
+      }
     } else if (matchState === "fight") {
-      if (step > 0) update(step);
+      if (step > 0) {
+        updateAI(step);
+        update(step);
+      }
       if (matchState === "fight" && step > 0) {
         matchTime -= step;
         if (matchTime <= 0) {
@@ -2615,7 +2821,7 @@
     if (e.code === "Space" || e.key === " ") e.preventDefault();
     if (e.key === "Enter") {
       e.preventDefault();
-      if (matchState === "result" && !e.repeat && !keysDown.enter) beginCountdown();
+      if (matchState === "result" && !e.repeat && !keysDown.enter) beginMatch();
       keysDown.enter = true;
       return;
     }
@@ -2642,6 +2848,7 @@
       return;
     }
     keysDown[k] = true;
+    if (mapped[0] === "R" && gameMode === "ai") return;
     if (mapped[1] === "spike") shieldPressDown(right);
     else tryCast(mapped[0] === "L" ? left : right, mapped[1]);
   });
@@ -2816,8 +3023,18 @@
   });
 
   startBtn.addEventListener("click", function () {
-    if (matchState === "menu" || matchState === "result") beginCountdown();
+    if (matchState === "menu" || matchState === "result") beginMatch();
   });
+
+  document.getElementById("modeAi").addEventListener("click", function () {
+    gameMode = "ai";
+    syncModeButtons();
+  });
+  document.getElementById("modeVs").addEventListener("click", function () {
+    gameMode = "vs";
+    syncModeButtons();
+  });
+  syncModeButtons();
 
   reset();
   syncGate();
