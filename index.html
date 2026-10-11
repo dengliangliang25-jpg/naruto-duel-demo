@@ -65,6 +65,9 @@
   var selectedL = null; // 2P left pick
   var selectedR = null; // 2P right pick
   var vsAssignSide = "L"; // which slot receives the next card click in 2P
+  var selectedScroll = null; // solo human scroll id
+  var selectedScrollL = null; // 2P left scroll
+  var selectedScrollR = null; // 2P right scroll
   var charHover = -1;
   var cardImgs = {};
   (function loadCards() {
@@ -72,10 +75,44 @@
     var i;
     for (i = 0; i < ids.length; i++) {
       var img = new Image();
-      img.src = "cards/" + ids[i] + ".png?v=" + "pages12";
+      img.src = "cards/" + ids[i] + ".png?v=" + "pages13";
       cardImgs[ids[i]] = img;
     }
   })();
+  var SCROLL_DEFS = [
+    { id: "scroll_quake", name: "震地", role: "密卷", color: "#e07030", icon: "icons/icon_01.png", max: 12, cost: 25, dmg: 18 },
+    { id: "scroll_bolt", name: "雷殛", role: "密卷", color: "#40c0ff", icon: "icons/icon_02.png", max: 10, cost: 22, dmg: 16 },
+    { id: "scroll_blade", name: "金刃", role: "密卷", color: "#f0c040", icon: "icons/icon_03.png", max: 11, cost: 24, dmg: 20 },
+    { id: "scroll_gale", name: "苍岚", role: "密卷", color: "#5080ff", icon: "icons/icon_04.png", max: 9, cost: 20, dmg: 14 }
+  ];
+  var scrollImgs = {};
+  (function loadScrolls() {
+    var i;
+    for (i = 0; i < SCROLL_DEFS.length; i++) {
+      var img = new Image();
+      img.src = SCROLL_DEFS[i].icon + "?v=" + "pages13";
+      scrollImgs[SCROLL_DEFS[i].id] = img;
+    }
+  })();
+  function scrollById(id) {
+    var i;
+    for (i = 0; i < SCROLL_DEFS.length; i++) if (SCROLL_DEFS[i].id === id) return SCROLL_DEFS[i];
+    return null;
+  }
+  function makeScrollSkill(def, keyLabel) {
+    return {
+      key: keyLabel || "V",
+      name: def.name,
+      role: def.role,
+      cd: 0,
+      max: def.max,
+      cost: def.cost,
+      scroll: true,
+      color: def.color,
+      dmg: def.dmg,
+      iconId: def.id
+    };
+  }
   var roundIndex = 1;
   var roundWinsL = 0;
   var roundWinsR = 0;
@@ -112,7 +149,7 @@
   sharinganImg.src = "sharingan.png";
 
   // Bump when sprite PNGs change so browsers/CDN do not serve stale frames.
-  var ASSET_V = "pages12";
+  var ASSET_V = "pages13";
   function loadStrip(prefix, count, folder) {
     var arr = [];
     var i;
@@ -371,13 +408,13 @@
   }
 
   function sideKeyLabels(side, orderLen) {
-    var keys = side === "L" ? ["Q", "E", "R", "F", "C", "V"] : ["U", "I", "O", "P", "J", "K"];
+    var keys = side === "L" ? ["Q", "E", "R", "F", "C", "V", "B"] : ["U", "I", "O", "P", "J", "K", "L"];
     return keys.slice(0, orderLen);
   }
 
   function rebuildControlMap() {
-    var leftKeys = ["q", "e", "r", "f", "c", "v"];
-    var rightKeys = ["u", "i", "o", "p", "j", "k"];
+    var leftKeys = ["q", "e", "r", "f", "c", "v", "b"];
+    var rightKeys = ["u", "i", "o", "p", "j", "k", "l"];
     var map = {};
     var i, labels;
     labels = sideKeyLabels("L", leftOrder.length);
@@ -393,11 +430,43 @@
     controlMap = map;
   }
 
-  function applyMatchKits(kitL, kitR) {
+  function attachScrollSkill(f, orderArr, scrollId, keyLabel) {
+    var def = scrollById(scrollId);
+    if (!def) return orderArr;
+    // Drop any previous scroll skill ids from order/skills
+    var cleaned = [];
+    var i, sid;
+    for (i = 0; i < orderArr.length; i++) {
+      sid = orderArr[i];
+      if (sid.indexOf("scroll_") === 0) {
+        delete f.skills[sid];
+      } else {
+        cleaned.push(sid);
+      }
+    }
+    f.skills[def.id] = makeScrollSkill(def, keyLabel);
+    cleaned.push(def.id);
+    f.scrollId = def.id;
+    return cleaned;
+  }
+
+  function pickAiScroll(avoidId) {
+    var pool = [];
+    var i;
+    for (i = 0; i < SCROLL_DEFS.length; i++) {
+      if (SCROLL_DEFS[i].id !== avoidId) pool.push(SCROLL_DEFS[i].id);
+    }
+    if (!pool.length) return SCROLL_DEFS[0].id;
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+
+  function applyMatchKits(kitL, kitR, scrollL, scrollR) {
     applySideKit(left, kitL || "obito");
     applySideKit(right, kitR || "pain");
     leftOrder = KIT_DEFS[left.kit].order.slice();
     rightOrder = KIT_DEFS[right.kit].order.slice();
+    leftOrder = attachScrollSkill(left, leftOrder, scrollL, "V");
+    rightOrder = attachScrollSkill(right, rightOrder, scrollR, "L");
     rebuildControlMap();
   }
 
@@ -724,9 +793,12 @@
     if (gameMode === "vs") {
       selectedL = null;
       selectedR = null;
+      selectedScrollL = null;
+      selectedScrollR = null;
       vsAssignSide = "L";
     } else {
       selectedChar = selectedChar || "obito";
+      selectedScroll = selectedScroll || null;
     }
     syncFlowHint();
   }
@@ -779,17 +851,24 @@
     matchResult = null;
     if (gameMode === "vs") {
       playerSide = "L"; // both human; sticks stay L/R
-      applyMatchKits(selectedL || "obito", selectedR || "pain");
+      applyMatchKits(
+        selectedL || "obito",
+        selectedR || "pain",
+        selectedScrollL || SCROLL_DEFS[0].id,
+        selectedScrollR || SCROLL_DEFS[1].id
+      );
     } else {
       // Solo: player picks one unlocked kit; opponent gets the other unlocked kit.
       var humanKit = selectedChar || "obito";
       var aiKit = humanKit === "obito" ? "pain" : "obito";
+      var humanScroll = selectedScroll || SCROLL_DEFS[0].id;
+      var aiScroll = pickAiScroll(humanScroll);
       if (humanKit === "pain") {
         playerSide = "R";
-        applyMatchKits(aiKit, humanKit);
+        applyMatchKits(aiKit, humanKit, aiScroll, humanScroll);
       } else {
         playerSide = "L";
-        applyMatchKits(humanKit, aiKit);
+        applyMatchKits(humanKit, aiKit, humanScroll, aiScroll);
       }
     }
     beginCountdown();
@@ -891,6 +970,67 @@
     else if (id === "tele" || id === "back") castBackstep(f);
     else if (id === "swap") castRetreat(f);
     else if (id === "pull") castPull(f);
+    else if (id.indexOf("scroll_") === 0) castScroll(f, id);
+  }
+
+  function castScroll(f, id) {
+    var sk = f.skills[id];
+    var def = scrollById(id);
+    var opp = other(f);
+    var color = (def && def.color) || (sk && sk.color) || "#fff";
+    var dmg = (sk && sk.dmg) || (def && def.dmg) || 14;
+    f.anim = "punch";
+    f.animT = 0;
+    f.animDur = 0.55;
+    f.busy = 0.5;
+    f.hitPending = false;
+    spawnFloater(f.x, f.y - 170, (def && def.name) || "密卷", color);
+    bursts.push({
+      x: f.x + f.facing * 40,
+      y: f.y - 90,
+      life: 0.45,
+      max: 0.45,
+      kind: "flash",
+      facing: f.facing || 1,
+      scale: 1.8
+    });
+    if (id === "scroll_quake") {
+      // Shockwave around caster
+      rings.push({ x: f.x, y: f.y - 10, life: 0.55, max: 0.55, color: color, r0: 20, r1: 220 });
+      if (Math.abs(opp.x - f.x) < 260 && Math.abs(opp.y - f.y) < 80) {
+        hurt(opp, dmg, color);
+        opp.hitPushVx = (opp.x >= f.x ? 1 : -1) * 220;
+      }
+    } else if (id === "scroll_bolt") {
+      launchAt(f, "rod", 980, 16, dmg, 0.9, 36, 88);
+      sparks.push({
+        x: f.x + f.facing * 30, y: f.y - 100,
+        vx: f.facing * 400, vy: -40, life: 0.35, max: 0.35, color: color, size: 8
+      });
+    } else if (id === "scroll_blade") {
+      f.dashT = 0.2;
+      f.dashVx = f.facing * 780;
+      f.dashVy = 0;
+      f.dashHit = false;
+      f.anim = isPain(f) ? "kick" : "punch";
+      f.animT = 0;
+      f.animDur = 0.4;
+      f.busy = 0.4;
+      if (Math.abs(opp.x - (f.x + f.facing * 80)) < 130 && Math.abs(opp.y - f.y) < 80) {
+        hurt(opp, dmg, color);
+      }
+      bursts.push({
+        x: f.x + f.facing * 70, y: f.y - 85,
+        life: 0.32, max: 0.32, kind: "impact", facing: f.facing || 1, scale: 1.6
+      });
+    } else if (id === "scroll_gale") {
+      rings.push({ x: f.x, y: f.y - 40, life: 0.5, max: 0.5, color: color, r0: 30, r1: 280 });
+      if (Math.abs(opp.x - f.x) < 320) {
+        hurt(opp, dmg, color);
+        opp.hitPushVx = (opp.x >= f.x ? 1 : -1) * 340;
+        opp.hitPushVy = -20;
+      }
+    }
   }
 
   function beginMelee(f, anim, dur, hitAt, hitAt2) {
@@ -1432,6 +1572,10 @@
       }
       if (f.skills.space && f.skills.space.cd <= 0 && Math.random() < 0.08) {
         tryCast(f, "space");
+        return;
+      }
+      if (f.scrollId && f.skills[f.scrollId] && f.skills[f.scrollId].cd <= 0 && f.chakra >= (f.skills[f.scrollId].cost || 0) && Math.random() < 0.12) {
+        tryCast(f, f.scrollId);
         return;
       }
     }
@@ -3251,7 +3395,22 @@
     }
     ctx.stroke();
     ctx.shadowBlur = 0;
-    icon(id, cx, cy - 2, ready ? "#fff8ef" : "#7a7470");
+    if (sk.scroll && scrollImgs[sk.iconId || id]) {
+      var simg = scrollImgs[sk.iconId || id];
+      if (simg.complete && simg.naturalWidth > 0) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(cx, cy - 2, 18, 0, Math.PI * 2);
+        ctx.clip();
+        ctx.globalAlpha = ready ? 1 : 0.45;
+        ctx.drawImage(simg, cx - 18, cy - 20, 36, 36);
+        ctx.restore();
+      } else {
+        icon(id, cx, cy - 2, ready ? "#fff8ef" : "#7a7470");
+      }
+    } else {
+      icon(id, cx, cy - 2, ready ? "#fff8ef" : "#7a7470");
+    }
     ctx.font = "bold 11px sans-serif";
     ctx.textAlign = "center";
     ctx.fillStyle = ready ? "#ffe7b0" : "rgba(200,180,150,0.45)";
@@ -3524,29 +3683,111 @@
     })(side));
   }
 
-  function drawVsCharSelectScreen() {
-    panelBox(40, 40, W - 80, H - 80);
+  function drawScrollPicker(y, mode) {
+    // mode: "solo" | "vs"
+    var i;
+    var iconR = 34;
+    var gap = 22;
+    var n = SCROLL_DEFS.length;
+    var totalW = n * (iconR * 2) + (n - 1) * gap;
+    var startX = (W - totalW) / 2 + iconR;
     ctx.textAlign = "center";
-    ctx.font = "bold 32px sans-serif";
+    ctx.font = "bold 16px sans-serif";
     ctx.fillStyle = "#f4fbff";
-    ctx.fillText("双人选角", W / 2, 88);
-    ctx.font = "15px sans-serif";
-    ctx.fillStyle = "rgba(200,220,230,0.85)";
-    ctx.fillText("先点左侧或右侧框，再点中央角色卡；两边必须选不同角色", W / 2, 116);
+    ctx.fillText("密卷", W / 2, y - 18);
+    ctx.font = "12px sans-serif";
+    ctx.fillStyle = "rgba(200,220,230,0.75)";
+    if (mode === "vs") {
+      ctx.fillText("点选密卷赋给当前侧（左/右框高亮）；左右各选一卷", W / 2, y - 2);
+    } else {
+      ctx.fillText("选择一卷密卷，开战后会出现在技能栏旁", W / 2, y - 2);
+    }
+    for (i = 0; i < n; i++) {
+      var def = SCROLL_DEFS[i];
+      var cx = startX + i * (iconR * 2 + gap);
+      var cy = y + 28;
+      var pickedSolo = mode === "solo" && selectedScroll === def.id;
+      var pickedL = mode === "vs" && selectedScrollL === def.id;
+      var pickedR = mode === "vs" && selectedScrollR === def.id;
+      var picked = pickedSolo || pickedL || pickedR;
+      ctx.beginPath();
+      ctx.arc(cx, cy, iconR + 4, 0, Math.PI * 2);
+      ctx.fillStyle = picked ? "rgba(62,240,224,0.25)" : "rgba(8,12,18,0.7)";
+      ctx.fill();
+      ctx.lineWidth = picked ? 3 : 2;
+      ctx.strokeStyle = picked ? "#3ef0e0" : "rgba(160,180,200,0.35)";
+      ctx.stroke();
+      var img = scrollImgs[def.id];
+      if (img && img.complete && img.naturalWidth > 0) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(cx, cy, iconR - 1, 0, Math.PI * 2);
+        ctx.clip();
+        ctx.drawImage(img, cx - iconR + 1, cy - iconR + 1, (iconR - 1) * 2, (iconR - 1) * 2);
+        ctx.restore();
+      } else {
+        ctx.beginPath();
+        ctx.arc(cx, cy, iconR - 4, 0, Math.PI * 2);
+        ctx.fillStyle = def.color;
+        ctx.fill();
+      }
+      if (pickedL || pickedR) {
+        ctx.font = "bold 11px sans-serif";
+        ctx.fillStyle = "#3ef0e0";
+        ctx.fillText(pickedL && pickedR ? "双" : (pickedL ? "左" : "右"), cx, cy + iconR + 14);
+      } else {
+        ctx.font = "bold 12px sans-serif";
+        ctx.fillStyle = picked ? "#3ef0e0" : "rgba(230,240,250,0.85)";
+        ctx.fillText(def.name, cx, cy + iconR + 14);
+      }
+      addHit(cx - iconR - 4, cy - iconR - 4, (iconR + 4) * 2, (iconR + 4) * 2 + 16, (function (sid) {
+        return function () {
+          if (mode === "solo") {
+            selectedScroll = sid;
+          } else {
+            if (vsAssignSide === "L") {
+              if (selectedScrollR === sid) selectedScrollR = null;
+              selectedScrollL = sid;
+              vsAssignSide = selectedScrollR ? "L" : "R";
+            } else {
+              if (selectedScrollL === sid) selectedScrollL = null;
+              selectedScrollR = sid;
+              vsAssignSide = selectedScrollL ? "R" : "L";
+            }
+            if (selectedScrollL && selectedScrollR && selectedScrollL !== selectedScrollR) vsAssignSide = "L";
+          }
+        };
+      })(def.id));
+    }
+  }
 
-    var slotW = 210;
-    var slotH = 420;
-    drawVsSlot(56, 140, slotW, slotH, "L", selectedL);
-    drawVsSlot(W - 56 - slotW, 140, slotW, slotH, "R", selectedR);
+  function vsScrollReady() {
+    return !!(selectedScrollL && selectedScrollR);
+  }
+
+  function drawVsCharSelectScreen() {
+    panelBox(40, 28, W - 80, H - 56);
+    ctx.textAlign = "center";
+    ctx.font = "bold 28px sans-serif";
+    ctx.fillStyle = "#f4fbff";
+    ctx.fillText("双人选角", W / 2, 62);
+    ctx.font = "13px sans-serif";
+    ctx.fillStyle = "rgba(200,220,230,0.85)";
+    ctx.fillText("先点左/右框再选角色；底部再为左右各选一卷密卷", W / 2, 84);
+
+    var slotW = 190;
+    var slotH = 300;
+    drawVsSlot(56, 100, slotW, slotH, "L", selectedL);
+    drawVsSlot(W - 56 - slotW, 100, slotW, slotH, "R", selectedR);
 
     var cols = 3;
-    var cardW = 150;
-    var cardH = 220;
-    var gapX = 18;
-    var gapY = 16;
+    var cardW = 124;
+    var cardH = 168;
+    var gapX = 14;
+    var gapY = 10;
     var gridW = cols * cardW + (cols - 1) * gapX;
     var startX = (W - gridW) / 2;
-    var startY = 150;
+    var startY = 98;
     var i;
     for (i = 0; i < charRoster.length; i++) {
       var c = charRoster[i];
@@ -3555,8 +3796,7 @@
       var x = startX + col * (cardW + gapX);
       var y = startY + row * (cardH + gapY);
       var taken = (selectedL === c.id) || (selectedR === c.id);
-      var selected = taken;
-      drawPortraitCard(x, y, cardW, cardH, c, selected, false);
+      drawPortraitCard(x, y, cardW, cardH, c, taken, false);
       if (c.unlocked) {
         addHit(x, y, cardW, cardH, (function (cid) {
           return function () { pickVsCard(cid); };
@@ -3564,36 +3804,41 @@
       }
     }
 
-    var can = vsCanConfirm();
-    ctx.font = "14px sans-serif";
-    ctx.fillStyle = can ? "rgba(180,255,220,0.9)" : "rgba(255,180,140,0.9)";
-    ctx.fillText(can ? "双方已选不同角色，可以开始" : "请为左右各选一名不同角色", W / 2, H - 92);
+    drawScrollPicker(460, "vs");
 
-    flowButton(40, H - 70, 140, 42, "返回", false, function () { goMode(); });
-    flowButton(W / 2 - 110, H - 78, 220, 52, "开始对战", can, function () {
-      if (!vsCanConfirm()) return;
+    var can = vsCanConfirm() && vsScrollReady();
+    ctx.font = "13px sans-serif";
+    ctx.fillStyle = can ? "rgba(180,255,220,0.9)" : "rgba(255,180,140,0.9)";
+    var tip = "请为左右各选不同角色与密卷";
+    if (vsCanConfirm() && !vsScrollReady()) tip = "角色已选，请再为左右各选密卷";
+    else if (can) tip = "可以开始对战";
+    ctx.fillText(tip, W / 2, H - 78);
+
+    flowButton(40, H - 58, 120, 38, "返回", false, function () { goMode(); });
+    flowButton(W / 2 - 100, H - 64, 200, 46, "开始对战", can, function () {
+      if (!vsCanConfirm() || !vsScrollReady()) return;
       beginMatch();
     });
   }
 
   function drawSoloCharSelectScreen() {
-    panelBox(70, 70, W - 140, H - 140);
+    panelBox(50, 28, W - 100, H - 56);
     ctx.textAlign = "center";
-    ctx.font = "bold 34px sans-serif";
+    ctx.font = "bold 30px sans-serif";
     ctx.fillStyle = "#f4fbff";
-    ctx.fillText("选择你的角色", W / 2, 120);
-    ctx.font = "15px sans-serif";
+    ctx.fillText("选择角色与密卷", W / 2, 68);
+    ctx.font = "13px sans-serif";
     ctx.fillStyle = "rgba(200,220,230,0.8)";
-    ctx.fillText("已解锁 2 人，其余即将开放。对手自动是另一位解锁角色。", W / 2, 150);
+    ctx.fillText("先点角色卡，再点底部密卷，然后开始。对手自动是另一位解锁角色。", W / 2, 92);
 
     var cols = 3;
-    var cardW = 200;
-    var cardH = 280;
-    var gapX = 24;
-    var gapY = 20;
+    var cardW = 150;
+    var cardH = 200;
+    var gapX = 18;
+    var gapY = 12;
     var gridW = cols * cardW + (cols - 1) * gapX;
     var startX = (W - gridW) / 2;
-    var startY = 175;
+    var startY = 108;
     var i;
     for (i = 0; i < charRoster.length; i++) {
       var c = charRoster[i];
@@ -3605,14 +3850,23 @@
       drawPortraitCard(x, y, cardW, cardH, c, selected, false);
       if (c.unlocked) {
         addHit(x, y, cardW, cardH, (function (cid) {
-          return function () {
-            applyPlayerPick(cid);
-            beginMatch();
-          };
+          return function () { applyPlayerPick(cid); };
         })(c.id));
       }
     }
-    flowButton(40, H - 70, 140, 42, "返回", false, function () { goMode(); });
+
+    drawScrollPicker(520, "solo");
+
+    var can = !!(selectedChar && selectedScroll);
+    ctx.font = "13px sans-serif";
+    ctx.fillStyle = can ? "rgba(180,255,220,0.9)" : "rgba(255,180,140,0.9)";
+    ctx.fillText(can ? "角色与密卷已选，可以开始" : "请选择角色和一卷密卷", W / 2, H - 78);
+
+    flowButton(40, H - 58, 120, 38, "返回", false, function () { goMode(); });
+    flowButton(W / 2 - 100, H - 64, 200, 46, "开始对战", can, function () {
+      if (!selectedChar || !selectedScroll) return;
+      beginMatch();
+    });
   }
 
   function drawCharSelectScreen() {
