@@ -132,7 +132,7 @@
   sharinganImg.src = "sharingan.png";
 
   // Bump when sprite PNGs change so browsers/CDN do not serve stale frames.
-  var ASSET_V = "pages6";
+  var ASSET_V = "pages7";
   function loadStrip(prefix, count, folder) {
     var arr = [];
     var i;
@@ -150,6 +150,7 @@
     walk: loadStrip("walk", 8),
     run: loadStrip("run", 8),
     breath: loadStrip("breath", 8),
+    firebreath: loadStrip("fire", 32, "obito/firebreath"),
     phase: loadStrip("phase", 8),
     tele: loadStrip("tele", 8),
     punch: loadStrip("punch", 8)
@@ -281,7 +282,7 @@
     punch: { key: "Q", name: "掌击", role: "突进", cd: 0, max: 0.7, cost: 0 },
     phase: { key: "E", name: "虚化", role: "灵体", cd: 0, max: 6, cost: 30 },
     tele: { key: "R", name: "传送", role: "突进", cd: 0, max: 1.15, cost: 16 },
-    breath: { key: "F", name: "喷火", role: "远程", cd: 0, max: 1.15, cost: 22 },
+    breath: { key: "F", name: "喷火", role: "远程", cd: 0, max: 1.7, cost: 22 },
     space: { key: "C", name: "切空间", role: "空间", cd: 0, max: 0, cost: 0 }
   };
   right.skills = {
@@ -559,22 +560,26 @@
     var dir = f.facing < 0 ? -1 : 1;
     f.anim = "breath";
     f.animT = 0;
-    f.animDur = 0.64;
-    f.busy = 0.5;
+    // 32 frames at ~20fps ≈ 1.6s; hold breath pose for the full VFX.
+    f.animDur = 1.6;
+    f.busy = 1.45;
     f.hitPending = false;
     projectiles.push({
-      kind: "fire",
-      x: f.x + dir * 48,
-      y: f.y - 78,
-      vx: dir * 624,
+      kind: "firebreath",
+      x: f.x + dir * 26,
+      y: f.y - 118,
+      vx: 0,
       vy: 0,
-      r: 18,
+      r: 40,
       dmg: boosted(f, 15),
       owner: f.id,
-      life: 2.4,
+      facing: f.facing,
+      life: 1.6,
       age: 0,
-      scale: 0.28,
-      seed: Math.random() * 10
+      fps: 20,
+      drawScale: 2.2,
+      hit: false,
+      tickAcc: 0
     });
   }
 
@@ -1168,6 +1173,35 @@
     for (i = projectiles.length - 1; i >= 0; i--) {
       var p = projectiles[i];
       p.life -= dt;
+      if (p.kind === "firebreath") {
+        p.age = (p.age || 0) + dt;
+        var ownerFb = p.owner === "L" ? left : right;
+        var dirFb = ownerFb.facing < 0 ? -1 : 1;
+        p.facing = ownerFb.facing;
+        // Keep the flame tip glued to Obito's mouth.
+        p.x = ownerFb.x + dirFb * 26;
+        p.y = ownerFb.y - 118;
+        var targetFb = p.owner === "L" ? right : left;
+        var prog = p.age / 1.6;
+        if (prog > 1) prog = 1;
+        // Reach grows as the stream extends; stays large for most of the cast.
+        var reach = 220 + 700 * Math.min(1, prog / 0.35);
+        var midX = p.x + dirFb * reach * 0.52;
+        var midY = p.y + 36;
+        var halfW = reach * 0.48;
+        var halfH = 110 + 40 * Math.min(1, prog / 0.4);
+        var inBeam = Math.abs(targetFb.x - midX) < halfW && Math.abs((targetFb.y - 74) - midY) < halfH;
+        if (inBeam && !p.hit && prog > 0.12) {
+          if (targetFb.phase > 0 || targetFb.invuln > 0) {
+            /* phased: breath passes through */
+          } else if (hurt(targetFb, p.dmg, p.owner === "L" ? left.palette.glow : right.palette.glow)) {
+            p.hit = true;
+            rings.push({ x: targetFb.x, y: targetFb.y, life: 0.28, max: 0.28, color: "#ff8a3a" });
+          }
+        }
+        if (p.life <= 0) projectiles.splice(i, 1);
+        continue;
+      }
       p.x += p.vx * dt;
       p.y += p.vy * dt;
       if (p.kind === "fire") {
@@ -1865,6 +1899,27 @@
   }
 
   function drawOneProjectile(p) {
+      if (p.kind === "firebreath") {
+        var fbFrames = obito.firebreath;
+        var fps = p.fps || 20;
+        var fi = Math.floor((p.age || 0) * fps);
+        if (fi < 0) fi = 0;
+        if (fi >= fbFrames.length) fi = fbFrames.length - 1;
+        var fbImg = fbFrames[fi];
+        if (fbImg && fbImg.complete && fbImg.naturalWidth > 0) {
+          var scb = p.drawScale || 2.2;
+          var dwb = fbImg.naturalWidth * scb;
+          var dhb = fbImg.naturalHeight * scb;
+          var face = (p.facing != null ? p.facing : 1);
+          ctx.save();
+          ctx.translate(p.x, p.y);
+          ctx.scale(face < 0 ? -1 : 1, 1);
+          // Left tip of the art is the mouth anchor.
+          ctx.drawImage(fbImg, 0, -dhb * 0.45, dwb, dhb);
+          ctx.restore();
+        }
+        return;
+      }
       ctx.save();
       ctx.translate(p.x, p.y);
       ctx.rotate(Math.atan2(p.vy || 0, p.vx || 0.001));
