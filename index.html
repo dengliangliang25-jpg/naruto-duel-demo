@@ -93,7 +93,7 @@
   sharinganImg.src = "sharingan.png";
 
   // Bump when sprite PNGs change so browsers/CDN do not serve stale frames.
-  var ASSET_V = "pages1";
+  var ASSET_V = "pages2";
   function loadStrip(prefix, count, folder) {
     var arr = [];
     var i;
@@ -1582,7 +1582,8 @@
     var y = groundY + 2 + painFootDrop - painIdleFootPad * painScale + repulseFootPad * repulseScale;
     ctx.save();
     ctx.translate(x, y);
-    ctx.scale(facing < 0 ? -1 : 1, 1);
+    // Pain art faces left; flip when facing right (opposite of Obito).
+    ctx.scale(facing < 0 ? 1 : -1, 1);
     ctx.globalAlpha = alpha;
     ctx.drawImage(img, -dw / 2, -dh, dw, dh);
     ctx.restore();
@@ -1596,7 +1597,8 @@
     var dh = img.height * painScale / painFrameScale;
     ctx.save();
     ctx.translate(x, groundY + 2 + painFootDrop);
-    ctx.scale(facing < 0 ? -1 : 1, 1);
+    // Pain art faces left; flip when facing right (opposite of Obito).
+    ctx.scale(facing < 0 ? 1 : -1, 1);
     ctx.globalAlpha = alpha;
     ctx.drawImage(img, -dw / 2, -dh, dw, dh);
     ctx.restore();
