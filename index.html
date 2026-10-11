@@ -93,7 +93,7 @@
   sharinganImg.src = "sharingan.png";
 
   // Bump when sprite PNGs change so browsers/CDN do not serve stale frames.
-  var ASSET_V = "pages2";
+  var ASSET_V = "pages3";
   function loadStrip(prefix, count, folder) {
     var arr = [];
     var i;
@@ -116,9 +116,10 @@
     punch: loadStrip("punch", 8)
   };
   // Body-height match (obito 180px, pain 143px) then both shrunk by the same
-  // 0.72 so they sit smaller on the expanded field. Foot pads stay in source px
-  // and are multiplied by these scales, so the shared ground line still lines up.
-  var obitoScale = 1.48 * 0.72;
+  // 0.72, then another 0.88 (same for both) so they sit smaller on the expanded field.
+  // Foot pads stay in source px and are multiplied by these scales, so the shared
+  // ground line still lines up.
+  var obitoScale = 1.48 * 0.72 * 0.88;
   var painScale = 180 * obitoScale / 143;
   // Body frames were rekeyed at 3x. Draw scale is divided so on-screen height
   // stays the same. painIdleFootPad is still the pre-upscale pad (6); the PNGs
@@ -146,8 +147,10 @@
     repulse: loadStrip("repulse", 20, "pain/repulse")
   };
   // Repulsion sheet: frames 1-12 are F05-F16, 13-20 are F17-F24. Play once, no loop.
-  // 12 fps keeps a short press near 1s (12 frames). A long press continues to F24.
-  var repulseFps = 12;
+  // 16 fps (was 12) shortens the wind-up; short press still ends on F16, long on F24.
+  var repulseFps = 16;
+  // Startup before the shield is live, scaled with the fps change (0.15 * 12 / 16).
+  var repulseWind = 0.15 * 12 / repulseFps;
   // Standing head-to-sole on this sheet is 171px; idle opaque span is 149px.
   var repulseScale = painScale * (149 / 171);
   // Source px from the sandal sole up from the bottom of every repulse frame.
@@ -369,6 +372,8 @@
     if (!sk || sk.cd > 0) return;
     if ((id === "phase" || id === "needle") && f.phase > 0) return;
     if ((f.chakra || 0) < (sk.cost || 0)) return;
+    // Using any other Obito skill during 虚化 drops out of it right away.
+    if (f.id === "L" && f.phase > 0 && id !== "phase") endPhase(f);
     if (id === "space" || id === "dash") {
       castSpace(f);
       f.chakra -= sk.cost || 0;
@@ -430,6 +435,12 @@
       owner: f.id,
       life: life
     });
+  }
+
+  function endPhase(f) {
+    f.phase = 0;
+    f.phaseEye = 0;
+    phaseSlow = 0;
   }
 
   function castNeedle(f) {
@@ -592,17 +603,17 @@
     if ((f.chakra || 0) < (sk.cost || 0)) return false;
     f.chakra -= sk.cost || 0;
     f.shield = 0;
-    f.shieldWind = 0.15;
+    f.shieldWind = repulseWind;
     f.repulseOn = true;
     f.repulseT = 0;
     f.repulseLong = true;
-    f.shieldPlan = repulseSpan(true) - 0.15;
+    f.shieldPlan = repulseSpan(true) - repulseWind;
     f.shieldDur = f.shieldPlan;
     f.shieldHit = false;
     f.anim = "idle";
     f.animT = 0;
     f.animDur = 0.2;
-    f.busy = 0.15;
+    f.busy = repulseWind;
     f.hitPending = false;
     return true;
   }
@@ -627,7 +638,7 @@
     }
     if (!(f.shield > 0)) return;
     f.shield = remain;
-    f.shieldDur = repulseSpan(long) - 0.15;
+    f.shieldDur = repulseSpan(long) - repulseWind;
   }
 
   function castPull(f) {
@@ -1456,9 +1467,6 @@
     return img;
   }
 
-  var phaseTint = document.createElement("canvas");
-  var phaseTintCtx = phaseTint.getContext("2d");
-
   function drawObitoAt(x, groundY, facing, set, index, alpha, phased, footDrop) {
     var img = obitoImage(set, index);
     if (!img) return;
@@ -1469,21 +1477,8 @@
     ctx.translate(x, groundY + 2 + (footDrop || 0));
     ctx.scale(facing < 0 ? -1 : 1, 1);
     ctx.globalAlpha = alpha;
-    if (phased) {
-      if (phaseTint.width < img.width) phaseTint.width = img.width;
-      if (phaseTint.height < img.height) phaseTint.height = img.height;
-      phaseTintCtx.setTransform(1, 0, 0, 1, 0, 0);
-      phaseTintCtx.globalCompositeOperation = "source-over";
-      phaseTintCtx.clearRect(0, 0, img.width, img.height);
-      phaseTintCtx.drawImage(img, 0, 0);
-      phaseTintCtx.globalCompositeOperation = "source-atop";
-      phaseTintCtx.fillStyle = "rgba(226, 228, 232, 0.78)";
-      phaseTintCtx.fillRect(0, 0, img.width, img.height);
-      phaseTintCtx.globalCompositeOperation = "source-over";
-      ctx.drawImage(phaseTint, 0, 0, img.width, img.height, -dw / 2, -dh, dw, dh);
-    } else {
-      ctx.drawImage(img, -dw / 2, -dh, dw, dh);
-    }
+    // 虚化 keeps the normal colours; only alpha (set by the caller) makes it see-through.
+    ctx.drawImage(img, -dw / 2, -dh, dw, dh);
     ctx.restore();
   }
 
@@ -1523,7 +1518,7 @@
       idx = Math.floor(time * 6) % 8;
     }
     var phased = f.phase > 0;
-    if (phased) alpha = 0.55;
+    if (phased) alpha = 0.45;
     else if (f.anim !== "tele" && f.invuln > 0 && Math.sin(time * 40) > 0) alpha *= 0.45;
     if (phased && phaseSlow > 0) {
       var bodyFrame = obitoImage(set, idx);
@@ -1590,6 +1585,12 @@
     return true;
   }
 
+  // Native facing of each pain strip: idle (and the repulse sheet) is drawn facing
+  // left, while run/walk/dash/back and the attack strips are drawn facing right.
+  function painNativeLeft(set) {
+    return set === pain.idle || set === pain.turn;
+  }
+
   function drawPainAt(x, groundY, facing, set, index, alpha) {
     var img = painImage(set, index);
     if (!img) return;
@@ -1597,8 +1598,9 @@
     var dh = img.height * painScale / painFrameScale;
     ctx.save();
     ctx.translate(x, groundY + 2 + painFootDrop);
-    // Pain art faces left; flip when facing right (opposite of Obito).
-    ctx.scale(facing < 0 ? 1 : -1, 1);
+    // Flip so the art always looks along `facing` (-1 left, 1 right).
+    var nativeDir = painNativeLeft(set) ? -1 : 1;
+    ctx.scale((facing < 0 ? -1 : 1) * nativeDir, 1);
     ctx.globalAlpha = alpha;
     ctx.drawImage(img, -dw / 2, -dh, dw, dh);
     ctx.restore();
