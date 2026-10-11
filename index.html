@@ -93,7 +93,7 @@
   sharinganImg.src = "sharingan.png";
 
   // Bump when sprite PNGs change so browsers/CDN do not serve stale frames.
-  var ASSET_V = "pages4";
+  var ASSET_V = "pages5";
   function loadStrip(prefix, count, folder) {
     var arr = [];
     var i;
@@ -127,6 +127,9 @@
   var painFrameScale = 3;
   var obitoIdleFootPad = 2;
   var painIdleFootPad = 6;
+  // Per-idle-frame transparent rows under soles (source px). Used to keep feet planted while idle cycles.
+  var obitoIdleFootPads = [2, 2, 2, 2, 2, 2, 2, 2];
+  var painIdleFootPads = [21, 21, 21, 24, 24, 19];
   // Drop pain so its feet share obito's ground line (pain has more empty rows under the sandals).
   var painFootDrop = painIdleFootPad * painScale - obitoIdleFootPad * obitoScale;
   // Lowest-opaque row gap under each tele frame (source px). Larger than idle means the art floats.
@@ -523,7 +526,7 @@
       palette: f.palette, weapon: f.weapon, owner: f.id
     });
     f.invuln = (voidSpace && f.id === "L") ? 0.4 : 0.25;
-    var spot = clampSpot(f.x + dir * 504, f.y);
+    var spot = clampSpot(f.x + dir * 680, f.y);
     f.x = spot.x;
     f.y = spot.y;
     var opp = other(f);
@@ -557,12 +560,12 @@
       kind: "rod",
       x: palm.x,
       y: palm.y,
-      vx: dir * 624,
+      vx: dir * 900,
       vy: 0,
-      r: 8,
+      r: 5,
       dmg: 15,
       owner: f.id,
-      life: 1.6
+      life: 1.45
     });
   }
 
@@ -666,14 +669,14 @@
     var gi;
     for (gi = 0; gi < 3; gi++) {
       ghosts.push({
-        x: f.x + dir * gi * 36, y: f.y, facing: f.facing,
+        x: f.x + dir * gi * 48, y: f.y, facing: f.facing,
         life: 0.42 - gi * 0.08, max: 0.42,
         palette: f.palette, weapon: f.weapon, owner: f.id,
         alpha: 0.78 - gi * 0.18
       });
     }
     f.invuln = 0.28;
-    var spot = clampSpot(f.x + dir * 150, f.y);
+    var spot = clampSpot(f.x + dir * 200, f.y);
     f.x = spot.x;
     f.y = spot.y;
     f.anim = "back";
@@ -820,7 +823,7 @@
     if (f.id === "L") f.gait = "run";
     else f.gait = "run";
     var len = Math.sqrt(ix * ix + iy * iy);
-    var speed = f.id === "L" ? 660 : 525;
+    var speed = f.id === "L" ? 528 : 420;
     var step = clampSpot(f.x + ix / len * speed * dt, f.y + iy / len * speed * dt);
     f.x = step.x;
     f.y = step.y;
@@ -951,7 +954,7 @@
       } else {
         if (!koId && f.busy <= 0) walkFighter(f, dt);
         else if (!koId && f.anim === "punch" && f.animT < f.animDur * 0.45) {
-          var lunge = clampSpot(f.x + f.facing * 280 * dt, f.y);
+          var lunge = clampSpot(f.x + f.facing * 370 * dt, f.y);
           f.x = lunge.x;
           f.y = lunge.y;
         }
@@ -1008,7 +1011,7 @@
       }
       var target = p.owner === "L" ? right : left;
       var chestY = target.y - (p.kind === "fire" ? 78 : 74);
-      var hitR = p.kind === "fire" ? 28 * (p.scale || 0.28) : (p.kind === "push" ? 46 : (p.kind === "rod" ? 40 : (p.kind === "wave" ? 28 : 20)));
+      var hitR = p.kind === "fire" ? 28 * (p.scale || 0.28) : (p.kind === "push" ? 46 : (p.kind === "rod" ? 22 : (p.kind === "wave" ? 28 : 20)));
       if (planarDist(p.x, p.y, target.x, chestY) < hitR) {
         if (target.phase > 0 || target.invuln > 0) {
           /* ethereal: projectile passes through and is not a hit */
@@ -1494,7 +1497,6 @@
 
   function drawObito(f) {
     var set = obito.idle;
-    // Idle stays on frame 0 so feet stay planted (no strip bob / foot skating).
     var idx = 0;
     var alpha = 1;
     if (f.anim === "tele") {
@@ -1516,7 +1518,7 @@
       idx = Math.floor(time * 8.4) % 8;
     } else {
       set = obito.idle;
-      idx = 0;
+      idx = Math.floor(time * 4.5) % 8;
     }
     var phased = f.phase > 0;
     if (phased) alpha = 0.45;
@@ -1531,6 +1533,10 @@
       var pad = teleFootPad[idx];
       if (pad == null) pad = obitoIdleFootPad;
       footDrop = (pad - obitoIdleFootPad) * obitoScale;
+    } else if (set === obito.idle) {
+      var ipad = obitoIdleFootPads[idx];
+      if (ipad == null) ipad = obitoIdleFootPads[0];
+      footDrop = (ipad - obitoIdleFootPads[0]) * obitoScale;
     }
     drawObitoAt(f.x, f.y, f.facing, set, idx, alpha, phased, footDrop);
   }
@@ -1592,13 +1598,13 @@
     return set === pain.idle || set === pain.turn;
   }
 
-  function drawPainAt(x, groundY, facing, set, index, alpha) {
+  function drawPainAt(x, groundY, facing, set, index, alpha, footDrop) {
     var img = painImage(set, index);
     if (!img) return;
     var dw = img.width * painScale / painFrameScale;
     var dh = img.height * painScale / painFrameScale;
     ctx.save();
-    ctx.translate(x, groundY + 2 + painFootDrop);
+    ctx.translate(x, groundY + 2 + painFootDrop + (footDrop || 0));
     // Flip so the art always looks along `facing` (-1 left, 1 right).
     var nativeDir = painNativeLeft(set) ? -1 : 1;
     ctx.scale((facing < 0 ? -1 : 1) * nativeDir, 1);
@@ -1616,7 +1622,6 @@
       if (drawPainRepulse(f.x, f.y, f.facing, ridx, 1)) return;
     }
     var set = pain.idle;
-    // Idle stays on frame 0 so feet stay planted (no strip bob / foot skating).
     var idx = 0;
     var alpha = 1;
     if (f.anim === "combo" || f.anim === "kick" || f.anim === "rod" || f.anim === "push" || f.anim === "back") {
@@ -1634,10 +1639,16 @@
       idx = Math.floor(time * 8.4) % 6;
     } else {
       set = pain.idle;
-      idx = 0;
+      idx = Math.floor(time * 4.5) % 6;
     }
     if (f.invuln > 0 && Math.sin(time * 40) > 0) alpha *= 0.45;
-    drawPainAt(f.x, f.y, f.facing, set, idx, alpha);
+    var footDrop = 0;
+    if (set === pain.idle) {
+      var ppad = painIdleFootPads[idx];
+      if (ppad == null) ppad = painIdleFootPads[0];
+      footDrop = (ppad - painIdleFootPads[0]) * painScale / painFrameScale;
+    }
+    drawPainAt(f.x, f.y, f.facing, set, idx, alpha, footDrop);
   }
 
   function drawFighter(f) {
@@ -1691,27 +1702,28 @@
       ctx.rotate(Math.atan2(p.vy || 0, p.vx || 0.001));
       if (p.kind === "fire") ctx.scale(p.scale || 1, p.scale || 1);
       if (p.kind === "rod") {
-        ctx.globalAlpha = 0.35;
+        // Thin black rod: much narrower body, slightly shorter length.
+        ctx.globalAlpha = 0.3;
         ctx.fillStyle = "#f2f6ff";
-        ctx.fillRect(-78, -7, 118, 14);
+        ctx.fillRect(-68, -2.2, 104, 4.4);
         ctx.globalAlpha = 1;
         ctx.fillStyle = "#f4f7ff";
-        ctx.fillRect(-62, -8, 108, 16);
+        ctx.fillRect(-58, -2.6, 96, 5.2);
         ctx.fillStyle = "#2a2a2e";
-        ctx.fillRect(-58, -5.5, 100, 11);
+        ctx.fillRect(-54, -1.8, 90, 3.6);
         ctx.fillStyle = "#8d93a3";
-        ctx.fillRect(-58, -1.6, 100, 3);
+        ctx.fillRect(-54, -0.55, 90, 1.1);
         ctx.fillStyle = "#111216";
         ctx.beginPath();
-        ctx.moveTo(52, 0);
-        ctx.lineTo(36, -7);
-        ctx.lineTo(36, 7);
+        ctx.moveTo(46, 0);
+        ctx.lineTo(36, -2.4);
+        ctx.lineTo(36, 2.4);
         ctx.fill();
         ctx.fillStyle = "#111216";
         ctx.beginPath();
-        ctx.moveTo(-58, 0);
-        ctx.lineTo(-46, -6);
-        ctx.lineTo(-46, 6);
+        ctx.moveTo(-54, 0);
+        ctx.lineTo(-46, -2.2);
+        ctx.lineTo(-46, 2.2);
         ctx.fill();
       } else if (p.kind === "push") {
         ctx.strokeStyle = "rgba(230, 230, 240, 0.9)";
