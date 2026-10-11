@@ -75,7 +75,7 @@
     var i;
     for (i = 0; i < ids.length; i++) {
       var img = new Image();
-      img.src = "cards/" + ids[i] + ".png?v=" + "pages14";
+      img.src = "cards/" + ids[i] + ".png?v=" + "pages15";
       cardImgs[ids[i]] = img;
     }
   })();
@@ -90,7 +90,7 @@
     var i;
     for (i = 0; i < SCROLL_DEFS.length; i++) {
       var img = new Image();
-      img.src = SCROLL_DEFS[i].icon + "?v=" + "pages14";
+      img.src = SCROLL_DEFS[i].icon + "?v=" + "pages15";
       scrollImgs[SCROLL_DEFS[i].id] = img;
     }
   })();
@@ -149,7 +149,7 @@
   sharinganImg.src = "sharingan.png";
 
   // Bump when sprite PNGs change so browsers/CDN do not serve stale frames.
-  var ASSET_V = "pages14";
+  var ASSET_V = "pages15";
   function loadStrip(prefix, count, folder) {
     var arr = [];
     var i;
@@ -204,7 +204,9 @@
     kick: loadStrip("kick", 6, "pain"),
     rod: loadStrip("rod", 6, "pain"),
     push: loadStrip("push", 6, "pain"),
-    repulse: loadStrip("repulse", 20, "pain/repulse")
+    repulse: loadStrip("repulse", 20, "pain/repulse"),
+    pullCast: loadStrip("cast", 24, "pain/pull"),
+    pullFx: loadStrip("fx", 24, "pain/pull")
   };
   // Repulsion sheet: frames 1-12 are F05-F16, 13-20 are F17-F24. Play once, no loop.
   // 16 fps (was 12) shortens the wind-up; short press still ends on F16, long on F24.
@@ -218,6 +220,14 @@
   function repulseSpan(long) {
     return (long ? 20 : 12) / repulseFps;
   }
+  // Pull (吸力) cast + black-core VFX: 24 frames synced by index.
+  var pullCastFps = 18;
+  var pullCastSpan = 24 / pullCastFps;
+  var pullCastScale = painScale * (433 / 3) / 532;
+  var pullCastFootPad = 6;
+  var pullFxScale = 1.15;
+  var pullActiveFrom = 8 / pullCastFps;
+  var pullActiveUntil = 17 / pullCastFps;
 
   function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
 
@@ -406,6 +416,9 @@
       f.repulseOn = false;
       f.repulseT = 0;
       f.repulseLong = false;
+      f.pullOn = false;
+      f.pullAnimT = 0;
+      f.pullApplied = false;
     }
   }
 
@@ -548,6 +561,9 @@
     left.rooted = right.rooted = 0;
     left.pullT = right.pullT = 0;
     left.pullFx = right.pullFx = 0;
+    left.pullOn = right.pullOn = false;
+    left.pullAnimT = right.pullAnimT = 0;
+    left.pullApplied = right.pullApplied = false;
     left.shieldWind = right.shieldWind = 0;
     left.repulseOn = right.repulseOn = false;
     left.repulseT = right.repulseT = 0;
@@ -1329,12 +1345,20 @@
   }
 
   function castPull(f) {
-    f.anim = "push";
+    f.anim = "pull";
     f.animT = 0;
-    f.animDur = 0.48;
-    f.busy = 0.36;
+    f.animDur = pullCastSpan;
+    f.busy = pullCastSpan * 0.92;
     f.hitPending = false;
-    f.pullFx = 0.6;
+    f.pullOn = true;
+    f.pullAnimT = 0;
+    f.pullApplied = false;
+    f.pullFx = pullCastSpan;
+  }
+
+  function applyPullGrab(f) {
+    if (f.pullApplied) return;
+    f.pullApplied = true;
     var opp = other(f);
     var palm = palmOf(f);
     if (opp.phase > 0 || opp.invuln > 0 || opp.shield > 0) return;
@@ -1668,6 +1692,15 @@
         if (f.armor <= 0) {
           f.armor = 0;
           if (f.skills.spike) f.skills.spike.cd = f.skills.spike.max;
+        }
+      }
+      if (f.pullOn) {
+        f.pullAnimT = (f.pullAnimT || 0) + dt;
+        if (f.pullAnimT >= pullActiveFrom && !f.pullApplied) applyPullGrab(f);
+        if (f.pullAnimT >= pullCastSpan) {
+          f.pullOn = false;
+          f.pullAnimT = pullCastSpan;
+          if (f.anim === "pull") { f.anim = "idle"; f.animT = 0; f.animDur = 0.2; }
         }
       }
       if (f.pullFx > 0) f.pullFx = Math.max(0, f.pullFx - dt);
@@ -2557,6 +2590,22 @@
     return true;
   }
 
+  function drawPainPullCast(x, groundY, facing, index, alpha) {
+    var img = painImage(pain.pullCast, index);
+    if (!img) return false;
+    var dw = img.width * pullCastScale;
+    var dh = img.height * pullCastScale;
+    var y = groundY + 2 + painFootDrop - painIdleFootPad * painScale + pullCastFootPad * pullCastScale;
+    ctx.save();
+    ctx.translate(x, y);
+    // Cast sheet faces right (same as push/attack strips).
+    ctx.scale(facing < 0 ? -1 : 1, 1);
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(img, -dw / 2, -dh, dw, dh);
+    ctx.restore();
+    return true;
+  }
+
   // Native facing of each pain strip: idle (and the repulse sheet) is drawn facing
   // left, while run/walk/dash/back and the attack strips are drawn facing right.
   function painNativeLeft(set) {
@@ -2588,6 +2637,12 @@
   }
 
   function drawPain(f) {
+    if (f.pullOn && !isAirborne(f) && !isDowned(f) && !(f.hitLight && (f.stun || 0) > 0)) {
+      var pidx = Math.floor((f.pullAnimT || 0) * pullCastFps);
+      if (pidx < 0) pidx = 0;
+      if (pidx > 23) pidx = 23;
+      if (drawPainPullCast(f.x, f.y - (f.airH || 0), f.facing, pidx, 1)) return;
+    }
     if (f.repulseOn && !isAirborne(f) && !isDowned(f) && !(f.hitLight && (f.stun || 0) > 0)) {
       var last = f.repulseLong === false ? 11 : 19;
       var ridx = Math.floor((f.repulseT || 0) * repulseFps);
@@ -2614,11 +2669,12 @@
       set = pain.back;
       var bu = 1 - Math.min(1, (f.stun || 0) / 0.55);
       idx = Math.min(5, Math.floor(bu * 4));
-    } else if (f.anim === "combo" || f.anim === "kick" || f.anim === "rod" || f.anim === "push" || f.anim === "back") {
+    } else if (f.anim === "combo" || f.anim === "kick" || f.anim === "rod" || f.anim === "push" || f.anim === "back" || f.anim === "pull") {
       if (f.anim === "combo") set = pain.combo;
       else if (f.anim === "kick") set = pain.kick;
       else if (f.anim === "rod") set = pain.rod;
       else if (f.anim === "push") set = pain.push;
+      else if (f.anim === "pull") set = pain.push;
       else set = pain.back;
       var u = f.animDur > 0 ? f.animT / f.animDur : 1;
       if (u < 0) u = 0;
@@ -3089,62 +3145,32 @@
   }
 
   function drawPullStreams(f) {
-    if (!(f.pullFx > 0)) return;
+    if (!(f.pullOn || f.pullFx > 0)) return;
+    var frames = pain.pullFx;
+    if (!frames || !frames.length) return;
+    var tAnim = f.pullOn ? (f.pullAnimT || 0) : Math.max(0, pullCastSpan - (f.pullFx || 0));
+    var fi = Math.floor(tAnim * pullCastFps);
+    if (fi < 0) fi = 0;
+    if (fi > 23) fi = 23;
+    var img = painImage(frames, fi);
+    if (!img) return;
     var palm = palmOf(f);
-    var fade = f.pullFx / 0.6;
-    var i, k;
-    ctx.save();
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    for (i = 0; i < 11; i++) {
-      var len = 260 + (i % 5) * 80;
-      var spread = (i - 5) * 22;
-      var sx = palm.x - f.facing * len;
-      var sy = palm.y + spread + Math.sin(time * 3 + i) * 16;
-      if (i % 4 === 0) {
-        sx = palm.x + f.facing * len * 0.35;
-        sy = palm.y + (i % 2 === 0 ? -1 : 1) * (70 + (i % 3) * 24);
-      }
-      ctx.beginPath();
-      var steps = 18;
-      var vx = palm.x - sx;
-      var vy = palm.y - sy;
-      var vlen = Math.sqrt(vx * vx + vy * vy) || 1;
-      var nx = -vy / vlen;
-      var ny = vx / vlen;
-      for (k = 0; k <= steps; k++) {
-        var t = k / steps;
-        var wave = Math.sin(t * 12 - time * 16 + i * 1.4) * 22 * (1 - t);
-        var x = sx + vx * t + nx * wave;
-        var y = sy + vy * t + ny * wave;
-        if (k === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
-      }
-      ctx.globalAlpha = 0.82 * fade;
-      ctx.strokeStyle = i % 2 === 0 ? "rgba(12, 8, 10, 0.96)" : "rgba(150, 16, 22, 0.95)";
-      ctx.lineWidth = i % 2 === 0 ? 6 : 4.2;
-      ctx.stroke();
-      ctx.globalAlpha = 0.95 * fade;
-      ctx.strokeStyle = i % 2 === 0 ? "rgba(70, 8, 12, 0.95)" : "rgba(255, 54, 42, 0.92)";
-      ctx.lineWidth = 1.8;
-      ctx.stroke();
+    var ax = palm.x;
+    var ay = palm.y;
+    if (fi < 8) {
+      ax = f.x + f.facing * 36 * painScale;
+      ay = f.y - 100 * painScale;
     }
-    ctx.globalAlpha = 0.45 * fade;
-    ctx.fillStyle = "rgba(40, 6, 8, 0.9)";
-    ctx.beginPath();
-    ctx.arc(palm.x, palm.y, 28, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 0.9 * fade;
-    ctx.strokeStyle = "rgba(190, 24, 28, 0.95)";
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.arc(palm.x, palm.y, 28, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.globalAlpha = 0.95 * fade;
-    ctx.fillStyle = "rgba(20, 8, 10, 0.95)";
-    ctx.beginPath();
-    ctx.arc(palm.x, palm.y, 8, 0, Math.PI * 2);
-    ctx.fill();
+    var dw = img.width * pullFxScale;
+    var dh = img.height * pullFxScale;
+    var fade = 1;
+    if (!f.pullOn && f.pullFx > 0) fade = Math.min(1, f.pullFx / 0.25);
+    ctx.save();
+    ctx.translate(ax, ay);
+    ctx.scale(f.facing < 0 ? -1 : 1, 1);
+    ctx.globalAlpha = fade;
+    ctx.globalCompositeOperation = "source-over";
+    ctx.drawImage(img, -dw / 2, -dh / 2, dw, dh);
     ctx.restore();
   }
 
