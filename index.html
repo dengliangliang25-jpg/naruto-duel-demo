@@ -820,27 +820,27 @@
       if (charRoster[i].id === charId) c = charRoster[i];
     }
     if (!c || !c.unlocked) return;
-    // Prefer distinct: if the other slot already has this id, move assign to free slot or swap.
-    if (vsAssignSide === "L") {
-      if (selectedR === charId) {
-        // swap into L, clear R later or leave R and force distinct on confirm
-        selectedL = charId;
-        selectedR = null;
-      } else {
-        selectedL = charId;
-      }
+    // One-click fill: empty LEFT first, then empty RIGHT. Distinct only.
+    // If both filled, replace the focused side (click a box to focus). Optional slot-tap still works.
+    if (!selectedL) {
+      if (selectedR === charId) return;
+      selectedL = charId;
       vsAssignSide = selectedR ? "L" : "R";
-    } else {
-      if (selectedL === charId) {
-        selectedR = charId;
-        selectedL = null;
-      } else {
-        selectedR = charId;
-      }
-      vsAssignSide = selectedL ? "R" : "L";
+      return;
     }
-    // After both filled distinctly, keep focus on L for re-picks
-    if (selectedL && selectedR && selectedL !== selectedR) vsAssignSide = "L";
+    if (!selectedR) {
+      if (selectedL === charId) return;
+      selectedR = charId;
+      vsAssignSide = "L";
+      return;
+    }
+    if (vsAssignSide === "L") {
+      if (selectedR === charId) return;
+      selectedL = charId;
+    } else {
+      if (selectedL === charId) return;
+      selectedR = charId;
+    }
   }
 
   function beginMatch() {
@@ -3639,43 +3639,91 @@
   function drawVsSlot(x, y, w, h, side, pickId) {
     var active = vsAssignSide === side;
     var c = pickId ? rosterById(pickId) : null;
+    var scrollId = side === "L" ? selectedScrollL : selectedScrollR;
+    var scrollDef = scrollId ? scrollById(scrollId) : null;
     ctx.save();
     roundRect(x, y, w, h, 16);
-    ctx.fillStyle = active ? "rgba(20,48,52,0.95)" : "rgba(12,16,24,0.92)";
+    ctx.fillStyle = active ? "rgba(20,48,52,0.96)" : "rgba(12,16,24,0.92)";
     ctx.fill();
-    ctx.lineWidth = active ? 3 : 2;
-    ctx.strokeStyle = active ? "#3ef0e0" : "rgba(140,170,190,0.35)";
+    ctx.lineWidth = active ? 4 : 2;
+    ctx.strokeStyle = active ? "#3ef0e0" : (c ? "rgba(160,200,190,0.55)" : "rgba(140,170,190,0.35)");
     ctx.stroke();
+    if (active) {
+      ctx.fillStyle = "#3ef0e0";
+      ctx.beginPath();
+      ctx.moveTo(x + w / 2 - 9, y - 1);
+      ctx.lineTo(x + w / 2 + 9, y - 1);
+      ctx.lineTo(x + w / 2, y + 9);
+      ctx.closePath();
+      ctx.fill();
+    }
     ctx.textAlign = "center";
-    ctx.font = "bold 18px sans-serif";
+    ctx.font = "bold 17px sans-serif";
     ctx.fillStyle = "#f4fbff";
-    ctx.fillText(side === "L" ? "左侧 · P1" : "右侧 · P2", x + w / 2, y + 28);
-    ctx.font = "13px sans-serif";
+    ctx.fillText(side === "L" ? "左侧 · P1" : "右侧 · P2", x + w / 2, y + 26);
+    ctx.font = "12px sans-serif";
     ctx.fillStyle = "rgba(190,210,220,0.75)";
-    ctx.fillText(side === "L" ? "WASD · 左摇杆" : "方向键 · 右摇杆", x + w / 2, y + 50);
+    ctx.fillText(side === "L" ? "WASD · 左摇杆" : "方向键 · 右摇杆", x + w / 2, y + 46);
 
     if (c) {
       var img = cardImgs[c.id];
-      var boxY = y + 64;
-      var boxH = h - 100;
-      var boxW = w - 36;
-      var boxX = x + 18;
+      var boxY = y + 56;
+      var boxH = h - 108;
+      var boxW = w - 24;
+      var boxX = x + 12;
       roundRect(boxX, boxY, boxW, boxH, 12);
       ctx.fillStyle = "#ffffff";
       ctx.fill();
+      ctx.strokeStyle = "rgba(40,50,70,0.22)";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
       if (img && img.complete && img.naturalWidth > 0) {
-        var sc = Math.min((boxW - 12) / img.naturalWidth, (boxH - 36) / img.naturalHeight);
+        var sc = Math.min((boxW - 6) / img.naturalWidth, (boxH - 36) / img.naturalHeight);
         var dw = img.naturalWidth * sc;
         var dh = img.naturalHeight * sc;
-        ctx.drawImage(img, boxX + (boxW - dw) / 2, boxY + boxH - 28 - dh, dw, dh);
+        ctx.drawImage(img, boxX + (boxW - dw) / 2, boxY + boxH - 32 - dh, dw, dh);
+      } else {
+        var pal = (KIT_DEFS[c.id] && KIT_DEFS[c.id].palette) || { body: "#444", glow: "#aaa" };
+        ctx.beginPath();
+        ctx.arc(x + w / 2, boxY + boxH * 0.4, Math.min(boxW, boxH) * 0.2, 0, Math.PI * 2);
+        ctx.fillStyle = pal.body;
+        ctx.fill();
+        ctx.strokeStyle = pal.glow;
+        ctx.lineWidth = 3;
+        ctx.stroke();
       }
       ctx.font = "bold 20px sans-serif";
       ctx.fillStyle = "#14202c";
-      ctx.fillText(c.name, x + w / 2, y + h - 18);
+      ctx.fillText(c.name, x + w / 2, boxY + boxH - 12);
+      if (scrollDef) {
+        var simg = scrollImgs[scrollDef.id];
+        var sx = x + w / 2;
+        var sy = y + h - 24;
+        ctx.beginPath();
+        ctx.arc(sx, sy, 15, 0, Math.PI * 2);
+        ctx.fillStyle = "#0c1018";
+        ctx.fill();
+        if (simg && simg.complete && simg.naturalWidth > 0) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(sx, sy, 14, 0, Math.PI * 2);
+          ctx.clip();
+          ctx.drawImage(simg, sx - 14, sy - 14, 28, 28);
+          ctx.restore();
+        }
+        ctx.strokeStyle = scrollDef.color || "#3ef0e0";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(sx, sy, 15, 0, Math.PI * 2);
+        ctx.stroke();
+      }
     } else {
-      ctx.font = "bold 22px sans-serif";
+      ctx.font = "bold 16px sans-serif";
       ctx.fillStyle = active ? "#3ef0e0" : "rgba(160,180,200,0.55)";
-      ctx.fillText(active ? "点选中央角色卡" : "等待选择", x + w / 2, y + h * 0.55);
+      ctx.fillText(active ? "下一名：点中央角色" : "等待选择", x + w / 2, y + h * 0.48);
+      ctx.font = "12px sans-serif";
+      ctx.fillStyle = "rgba(180,200,210,0.6)";
+      ctx.fillText(side === "L" ? "第一次点击填这里" : "第二次点击填这里", x + w / 2, y + h * 0.58);
     }
     ctx.restore();
     addHit(x, y, w, h, (function (s) {
@@ -3698,7 +3746,7 @@
     ctx.font = "12px sans-serif";
     ctx.fillStyle = "rgba(200,220,230,0.75)";
     if (mode === "vs") {
-      ctx.fillText("点选密卷赋给当前侧（左/右框高亮）；左右各选一卷", W / 2, y - 2);
+      ctx.fillText("点密卷：先赋 P1，再赋 P2（也可点左右框后再改）", W / 2, y - 2);
     } else {
       ctx.fillText("选择一卷密卷，开战后会出现在技能栏旁", W / 2, y - 2);
     }
@@ -3745,16 +3793,20 @@
           if (mode === "solo") {
             selectedScroll = sid;
           } else {
-            if (vsAssignSide === "L") {
+            // Fill empty scroll slots left-then-right; if both filled, replace focused side
+            if (!selectedScrollL) {
               if (selectedScrollR === sid) selectedScrollR = null;
               selectedScrollL = sid;
-              vsAssignSide = selectedScrollR ? "L" : "R";
-            } else {
-              if (selectedScrollL === sid) selectedScrollL = null;
+            } else if (!selectedScrollR) {
+              if (selectedScrollL === sid) return;
               selectedScrollR = sid;
-              vsAssignSide = selectedScrollL ? "R" : "L";
+            } else if (vsAssignSide === "L") {
+              if (selectedScrollR === sid) return;
+              selectedScrollL = sid;
+            } else {
+              if (selectedScrollL === sid) return;
+              selectedScrollR = sid;
             }
-            if (selectedScrollL && selectedScrollR && selectedScrollL !== selectedScrollR) vsAssignSide = "L";
           }
         };
       })(def.id));
@@ -3773,7 +3825,10 @@
     ctx.fillText("双人选角", W / 2, 62);
     ctx.font = "13px sans-serif";
     ctx.fillStyle = "rgba(200,220,230,0.85)";
-    ctx.fillText("先点左/右框再选角色；底部再为左右各选一卷密卷", W / 2, 84);
+    var stepHint = !selectedL
+      ? "点击角色卡 → 自动填入左侧 P1"
+      : (!selectedR ? "再点另一名角色 → 自动填入右侧 P2" : "两边已选；点左右框可改侧，再点卡可更换");
+    ctx.fillText(stepHint, W / 2, 84);
 
     var slotW = 190;
     var slotH = 300;
@@ -3797,6 +3852,17 @@
       var y = startY + row * (cardH + gapY);
       var taken = (selectedL === c.id) || (selectedR === c.id);
       drawPortraitCard(x, y, cardW, cardH, c, taken, false);
+      if (taken) {
+        ctx.save();
+        ctx.font = "bold 12px sans-serif";
+        ctx.textAlign = "center";
+        roundRect(x + 8, y + 8, cardW - 16, 22, 7);
+        ctx.fillStyle = "#3ef0e0";
+        ctx.fill();
+        ctx.fillStyle = "#041018";
+        ctx.fillText(selectedL === c.id ? "已选 · 左" : "已选 · 右", x + cardW / 2, y + 23);
+        ctx.restore();
+      }
       if (c.unlocked) {
         addHit(x, y, cardW, cardH, (function (cid) {
           return function () { pickVsCard(cid); };
