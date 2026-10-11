@@ -183,9 +183,9 @@
   }
 
   function clampSpot(x, y) {
-    if (voidSpace) {
-      return { x: clamp(x, 150, 1130), y: clamp(y, 500, 650) };
-    }
+    // Void space only swaps the backdrop. Keep the same playable plane so Pain
+    // (and Obito) can still walk/fight after 切空间. The old 500–650 Y band
+    // pinned fighters and felt like a hard freeze.
     return { x: clamp(x, 90, 1190), y: clamp(y, 430, 680) };
   }
 
@@ -233,6 +233,7 @@
       hitShake: 0,
       hitLight: false,
       downT: 0,
+      downMax: 0,
       getUpT: 0,
       getUpMax: 0,
       phase: 0,
@@ -313,6 +314,7 @@
     left.hitShake = right.hitShake = 0;
     left.hitLight = right.hitLight = false;
     left.downT = right.downT = 0;
+    left.downMax = right.downMax = 0;
     left.getUpT = right.getUpT = 0;
     left.getUpMax = right.getUpMax = 0;
     left.hitPending = right.hitPending = false;
@@ -368,15 +370,28 @@
     // World-space lean: positive rotates so the head moves right (canvas y-down).
     var dir = f.hitLeanDir || 1;
     var local;
+    var flat = Math.PI * 0.40; // ~72°, not a hard 90° snap
     if ((f.downT || 0) > 0) {
-      local = Math.PI * 0.48;
+      var dMax = f.downMax || f.downT || 0.01;
+      var held = 1 - (f.downT / dMax);
+      if (held < 0) held = 0;
+      if (held > 1) held = 1;
+      // Ease into the lie: start from air tilt, settle flat (no instant 90°).
+      var u = held < 0.35 ? (held / 0.35) : 1;
+      u = u * u * (3 - 2 * u);
+      local = flat * (0.78 + 0.22 * u);
     } else if ((f.getUpT || 0) > 0 && (f.getUpMax || 0) > 0) {
-      local = Math.PI * 0.48 * (f.getUpT / f.getUpMax);
+      var t = f.getUpT / f.getUpMax; // 1=flat → 0=upright
+      // Ease-out stand: leave the floor sooner, finish smoothly.
+      var eased = Math.pow(t, 1.55);
+      local = flat * eased;
     } else if (isAirborne(f)) {
-      var t = (f.airH || 0) / 200;
-      if (t < 0) t = 0;
-      if (t > 1) t = 1;
-      local = 0.4 + t * 0.95;
+      var hNorm = (f.airH || 0) / 180;
+      if (hNorm < 0) hNorm = 0;
+      if (hNorm > 1) hNorm = 1;
+      var rising = (f.airV || 0) > 40;
+      if (rising) local = 0.22 + hNorm * 0.48;
+      else local = 0.30 + hNorm * 0.62;
     } else if ((f.hitLean || 0) > 0.001) {
       local = f.hitLean;
     } else {
@@ -535,16 +550,17 @@
     }
     hurt(f, impactDmg, "#ffe7a0", { noLaunch: true, fromImpact: true });
     spawnFloater(f.x, f.y - 160, "落地 " + impactDmg, "#ffc878");
-    // Knockdown lie-down, then get-up. Invulnerable through both.
-    f.downT = 0.72;
+    // Knockdown: shorter hard-flat, smoother get-up. Invulnerable through both.
+    f.downT = 0.40;
+    f.downMax = 0.40;
     f.getUpT = 0;
     f.getUpMax = 0;
-    f.hitLean = Math.PI * 0.48;
+    f.hitLean = Math.PI * 0.40;
     f.hitLight = false;
     f.hitPushVx = 0;
     f.hitPushVy = 0;
-    f.stun = Math.max(f.stun || 0, 0.72 + 0.38);
-    f.invuln = Math.max(f.invuln || 0, 0.72 + 0.38);
+    f.stun = Math.max(f.stun || 0, 0.40 + 0.52);
+    f.invuln = Math.max(f.invuln || 0, 0.40 + 0.52);
     f.gait = "idle";
     f.anim = "idle";
   }
@@ -981,14 +997,34 @@
     f.animDur = 0.2;
     f.busy = 0.1;
     f.hitPending = false;
+    // Buffs (damage/CD/phase length) stay Obito-only via boosted()/castNeedle.
+    // Never freeze the opponent: clear pull/root locks and keep both movable.
+    left.pullT = 0;
+    right.pullT = 0;
+    left.rooted = 0;
+    right.rooted = 0;
     var a = clampSpot(left.x, left.y);
     var b = clampSpot(right.x, right.y);
     left.x = a.x;
     left.y = a.y;
     right.x = b.x;
     right.y = b.y;
+    var sdx = right.x - left.x;
+    var sdy = right.y - left.y;
+    var ad = Math.sqrt(sdx * sdx + sdy * sdy);
+    if (ad < 56) {
+      var push = (56 - (ad > 0.01 ? ad : 0.01)) * 0.5;
+      var nx = ad > 0.01 ? sdx / ad : 1;
+      var ny = ad > 0.01 ? sdy / ad : 0;
+      a = clampSpot(left.x - nx * push, left.y - ny * push);
+      b = clampSpot(right.x + nx * push, right.y + ny * push);
+      left.x = a.x;
+      left.y = a.y;
+      right.x = b.x;
+      right.y = b.y;
+    }
     if (!voidSpace && left.phase > 3) left.phase = 3;
-    spawnFloater(f.x, f.y - 160, voidSpace ? "简易" : "返回", f.palette.glow);
+    spawnFloater(f.x, f.y - 160, voidSpace ? "进入" : "返回", f.palette.glow);
   }
 
   function castArmor(f) {
@@ -1088,17 +1124,11 @@
     var ix = 0;
     var iy = 0;
     if (gameMode === "ai" && !humanControls(f)) {
+      // AI still acts in void space — no special freeze when voidSpace is on.
       ix = f.aiIx || 0;
       iy = f.aiIy || 0;
     } else if (f.id === "L") {
-      if (keysDown.a) ix -= 1;
-      if (keysDown.d) ix += 1;
-      if (keysDown.w) iy -= 1;
-      if (keysDown.s) iy += 1;
-      ix += sticks[0].nx;
-      iy += sticks[0].ny;
-      // In AI mode when human plays as R, left stick still drives the human (R).
-    } else if (gameMode === "ai" && playerSide === "R") {
+      // Obito: WASD + left stick
       if (keysDown.a) ix -= 1;
       if (keysDown.d) ix += 1;
       if (keysDown.w) iy -= 1;
@@ -1106,12 +1136,19 @@
       ix += sticks[0].nx;
       iy += sticks[0].ny;
     } else {
+      // Pain: always arrow keys (incl. depth via Up/Down). Never WASD.
       if (keysDown.ArrowLeft) ix -= 1;
       if (keysDown.ArrowRight) ix += 1;
       if (keysDown.ArrowUp) iy -= 1;
       if (keysDown.ArrowDown) iy += 1;
-      ix += sticks[1].nx;
-      iy += sticks[1].ny;
+      // Mobile: human-as-Pain uses left stick; VS uses right stick.
+      if (gameMode === "ai" && playerSide === "R") {
+        ix += sticks[0].nx;
+        iy += sticks[0].ny;
+      } else {
+        ix += sticks[1].nx;
+        iy += sticks[1].ny;
+      }
     }
     if (ix < 0) f.facing = -1;
     else if (ix > 0) f.facing = 1;
@@ -1350,8 +1387,9 @@
         f.stun = Math.max(f.stun || 0, 0.05);
         if (f.downT <= 0) {
           f.downT = 0;
-          f.getUpT = 0.38;
-          f.getUpMax = 0.38;
+          f.downMax = 0;
+          f.getUpT = 0.52;
+          f.getUpMax = 0.52;
         }
         continue;
       }
@@ -1658,14 +1696,15 @@
       vg.addColorStop(1, "#07080c");
       ctx.fillStyle = vg;
       ctx.fillRect(0, 0, W, H);
-      ctx.strokeStyle = "rgba(214, 222, 232, 0.7)";
+      // Ground band aligned with the normal playable Y (430–680), not a thin strip.
+      ctx.strokeStyle = "rgba(214, 222, 232, 0.55)";
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo(36, 600);
-      ctx.lineTo(W - 36, 600);
+      ctx.moveTo(36, 560);
+      ctx.lineTo(W - 36, 560);
       ctx.stroke();
       ctx.fillStyle = "#12151c";
-      ctx.fillRect(0, 602, W, H - 602);
+      ctx.fillRect(0, 562, W, H - 562);
       return;
     }
     if (arenaImg.complete && arenaImg.naturalWidth > 0) {
@@ -2271,7 +2310,8 @@
           ctx.save();
           ctx.translate(p.x, p.y);
           ctx.scale(face < 0 ? -1 : 1, 1);
-          // Left tip of the art is the mouth anchor.
+          // Left tip of the art is the mouth anchor. No fillRect border — frames are pre-keyed.
+          ctx.globalCompositeOperation = "source-over";
           ctx.drawImage(fbImg, 0, -dhb * 0.45, dwb, dhb);
           ctx.restore();
         }
@@ -3146,7 +3186,7 @@
     var lines = [
       "三局两胜对决。带土擅长虚化与空间，橙发掌控黑棒与气盾。",
       "开局可选双人对战，或单人挑战人机。",
-      "移动用摇杆 / WASD 与方向键，技能点按图标或快捷键。",
+      "移动：带土 WASD / 橙发 方向键（或摇杆），技能点按图标或快捷键。",
       "受击会产生僵直，伤害越高停顿越久。"
     ];
     var i;
