@@ -75,22 +75,22 @@
     var i;
     for (i = 0; i < ids.length; i++) {
       var img = new Image();
-      img.src = "cards/" + ids[i] + ".png?v=" + "pages13";
+      img.src = "cards/" + ids[i] + ".png?v=" + "pages14";
       cardImgs[ids[i]] = img;
     }
   })();
   var SCROLL_DEFS = [
-    { id: "scroll_quake", name: "震地", role: "密卷", color: "#e07030", icon: "icons/icon_01.png", max: 12, cost: 25, dmg: 18 },
-    { id: "scroll_bolt", name: "雷殛", role: "密卷", color: "#40c0ff", icon: "icons/icon_02.png", max: 10, cost: 22, dmg: 16 },
-    { id: "scroll_blade", name: "金刃", role: "密卷", color: "#f0c040", icon: "icons/icon_03.png", max: 11, cost: 24, dmg: 20 },
-    { id: "scroll_gale", name: "苍岚", role: "密卷", color: "#5080ff", icon: "icons/icon_04.png", max: 9, cost: 20, dmg: 14 }
+    { id: "scroll_quake", name: "霸体", role: "密卷", color: "#e07030", icon: "icons/icon_01.png", max: 14, cost: 18, dmg: 0 },
+    { id: "scroll_bolt", name: "回蓝", role: "密卷", color: "#40c0ff", icon: "icons/icon_02.png", max: 16, cost: 0, dmg: 0 },
+    { id: "scroll_blade", name: "清CD", role: "密卷", color: "#f0c040", icon: "icons/icon_03.png", max: 18, cost: 12, dmg: 0 },
+    { id: "scroll_gale", name: "驱散", role: "密卷", color: "#5080ff", icon: "icons/icon_04.png", max: 12, cost: 16, dmg: 0 }
   ];
   var scrollImgs = {};
   (function loadScrolls() {
     var i;
     for (i = 0; i < SCROLL_DEFS.length; i++) {
       var img = new Image();
-      img.src = SCROLL_DEFS[i].icon + "?v=" + "pages13";
+      img.src = SCROLL_DEFS[i].icon + "?v=" + "pages14";
       scrollImgs[SCROLL_DEFS[i].id] = img;
     }
   })();
@@ -149,7 +149,7 @@
   sharinganImg.src = "sharingan.png";
 
   // Bump when sprite PNGs change so browsers/CDN do not serve stale frames.
-  var ASSET_V = "pages13";
+  var ASSET_V = "pages14";
   function loadStrip(prefix, count, folder) {
     var arr = [];
     var i;
@@ -288,6 +288,8 @@
       getUpMax: 0,
       phase: 0,
       armor: 0,
+      hyperArmor: 0,
+      chakraLock: 0,
       aiIx: 0,
       aiIy: 0,
       aiThink: 0,
@@ -540,6 +542,8 @@
     koId = null;
     voidSpace = false;
     left.armor = right.armor = 0;
+    left.hyperArmor = right.hyperArmor = 0;
+    left.chakraLock = right.chakraLock = 0;
     phaseSlow = 0;
     left.rooted = right.rooted = 0;
     left.pullT = right.pullT = 0;
@@ -604,9 +608,31 @@
     opts = opts || {};
     if (koId || target.hp <= 0 || target.invuln > 0 || target.phase > 0 || target.shield > 0) return false;
     if (isDowned(target) && !opts.fromImpact) return false;
+    var hyper = (target.hyperArmor || 0) > 0 && !opts.ignoreArmor;
     target.hp = Math.max(0, target.hp - amount);
     target.flash = 0.16;
     target.hurt = 0.14;
+    shake = Math.min(14, shake + 4.5 + Math.min(4, amount * 0.12));
+    spawnFloater(target.x + (Math.random() * 16 - 8), target.y - 148 - (target.airH || 0), String(amount), color);
+    if (hyper) {
+      // 霸体: take damage, keep acting; immune to stun / knockback / launch from normal hits.
+      // Grab/pull still moves the target via castPull (does not rely on hurt launch).
+      spawnFloater(target.x + (Math.random() * 10 - 5), target.y - 178 - (target.airH || 0), "霸体", "#e07030");
+      bursts.push({
+        x: target.x,
+        y: target.y - 86 - (target.airH || 0),
+        life: 0.18,
+        max: 0.18,
+        kind: "flash",
+        facing: target.facing || 1,
+        scale: 1.1
+      });
+      if (target.hp <= 0) {
+        koId = target.id === "L" ? "R" : "L";
+        finishRound(koId);
+      }
+      return true;
+    }
     var stunDur = 0.08 + amount * 0.035;
     if (stunDur > 0.85) stunDur = 0.85;
     target.stun = Math.max(target.stun || 0, stunDur);
@@ -616,8 +642,6 @@
     target.hitPending = false;
     target.hitPending2 = false;
     target.teleBlinked = false;
-    shake = Math.min(14, shake + 4.5 + Math.min(4, amount * 0.12));
-    spawnFloater(target.x + (Math.random() * 16 - 8), target.y - 148 - (target.airH || 0), String(amount), color);
     if (!opts.noLaunch) {
       spawnFloater(target.x + (Math.random() * 10 - 5), target.y - 178 - (target.airH || 0), "僵直", "#ffe7a0");
     }
@@ -978,57 +1002,87 @@
     var def = scrollById(id);
     var opp = other(f);
     var color = (def && def.color) || (sk && sk.color) || "#fff";
-    var dmg = (sk && sk.dmg) || (def && def.dmg) || 14;
-    f.anim = "punch";
+    f.anim = "cast";
     f.animT = 0;
-    f.animDur = 0.55;
-    f.busy = 0.5;
+    f.animDur = 0.42;
+    f.busy = 0.28;
     f.hitPending = false;
     spawnFloater(f.x, f.y - 170, (def && def.name) || "密卷", color);
     bursts.push({
-      x: f.x + f.facing * 40,
+      x: f.x + f.facing * 24,
       y: f.y - 90,
-      life: 0.45,
-      max: 0.45,
+      life: 0.4,
+      max: 0.4,
       kind: "flash",
       facing: f.facing || 1,
-      scale: 1.8
+      scale: 1.6
     });
     if (id === "scroll_quake") {
-      // Shockwave around caster
-      rings.push({ x: f.x, y: f.y - 10, life: 0.55, max: 0.55, color: color, r0: 20, r1: 220 });
-      if (Math.abs(opp.x - f.x) < 260 && Math.abs(opp.y - f.y) < 80) {
-        hurt(opp, dmg, color);
-        opp.hitPushVx = (opp.x >= f.x ? 1 : -1) * 220;
-      }
+      // 霸体 4s: immune to stun / knockback / launch; still movable by pull/grab.
+      f.hyperArmor = Math.max(f.hyperArmor || 0, 4);
+      rings.push({ x: f.x, y: f.y - 40, life: 0.55, max: 0.55, color: color, r0: 24, r1: 160 });
+      rings.push({ x: f.x, y: f.y - 40, life: 0.75, max: 0.75, color: "#ff9040", r0: 10, r1: 120 });
     } else if (id === "scroll_bolt") {
-      launchAt(f, "rod", 980, 16, dmg, 0.9, 36, 88);
-      sparks.push({
-        x: f.x + f.facing * 30, y: f.y - 100,
-        vx: f.facing * 400, vy: -40, life: 0.35, max: 0.35, color: color, size: 8
-      });
-    } else if (id === "scroll_blade") {
-      f.dashT = 0.2;
-      f.dashVx = f.facing * 780;
-      f.dashVy = 0;
-      f.dashHit = false;
-      f.anim = isPain(f) ? "kick" : "punch";
-      f.animT = 0;
-      f.animDur = 0.4;
-      f.busy = 0.4;
-      if (Math.abs(opp.x - (f.x + f.facing * 80)) < 130 && Math.abs(opp.y - f.y) < 80) {
-        hurt(opp, dmg, color);
+      // Instant full chakra + lock full for 10s.
+      f.chakra = f.maxChakra;
+      f.chakraLock = Math.max(f.chakraLock || 0, 10);
+      rings.push({ x: f.x, y: f.y - 50, life: 0.5, max: 0.5, color: color, r0: 18, r1: 180 });
+      var bi;
+      for (bi = 0; bi < 10; bi++) {
+        sparks.push({
+          x: f.x + (Math.random() * 40 - 20),
+          y: f.y - 60 - Math.random() * 80,
+          vx: (Math.random() - 0.5) * 120,
+          vy: -80 - Math.random() * 120,
+          life: 0.4,
+          max: 0.4,
+          color: color,
+          size: 5 + Math.random() * 4
+        });
       }
+    } else if (id === "scroll_blade") {
+      // Reset kit skill CDs; this scroll stays on its own CD.
+      var ck;
+      for (ck in f.skills) {
+        if (ck === id) continue;
+        if (String(ck).indexOf("scroll_") === 0) continue;
+        f.skills[ck].cd = 0;
+      }
+      rings.push({ x: f.x, y: f.y - 40, life: 0.45, max: 0.45, color: color, r0: 16, r1: 150 });
       bursts.push({
-        x: f.x + f.facing * 70, y: f.y - 85,
-        life: 0.32, max: 0.32, kind: "impact", facing: f.facing || 1, scale: 1.6
+        x: f.x, y: f.y - 90,
+        life: 0.35, max: 0.35, kind: "impact", facing: f.facing || 1, scale: 1.4
       });
     } else if (id === "scroll_gale") {
-      rings.push({ x: f.x, y: f.y - 40, life: 0.5, max: 0.5, color: color, r0: 30, r1: 280 });
-      if (Math.abs(opp.x - f.x) < 320) {
-        hurt(opp, dmg, color);
-        opp.hitPushVx = (opp.x >= f.x ? 1 : -1) * 340;
-        opp.hitPushVy = -20;
+      // Radius burst: 1s stun + dispel enemy 霸体.
+      var radius = 300;
+      rings.push({ x: f.x, y: f.y - 40, life: 0.55, max: 0.55, color: color, r0: 28, r1: radius });
+      rings.push({ x: f.x, y: f.y - 40, life: 0.4, max: 0.4, color: "#a0c0ff", r0: 10, r1: 200 });
+      var dxg = opp.x - f.x;
+      var dyg = opp.y - f.y;
+      if (Math.sqrt(dxg * dxg + dyg * dyg) <= radius && opp.phase <= 0 && opp.invuln <= 0 && opp.shield <= 0 && !isDowned(opp)) {
+        if ((opp.hyperArmor || 0) > 0) {
+          opp.hyperArmor = 0;
+          spawnFloater(opp.x, opp.y - 200, "驱散霸体", "#a0c8ff");
+        }
+        opp.stun = Math.max(opp.stun || 0, 1);
+        opp.busy = 0;
+        opp.dashT = 0;
+        opp.hitPending = false;
+        opp.hitPending2 = false;
+        opp.hitLight = true;
+        opp.hitLean = Math.max(opp.hitLean || 0, 12 * Math.PI / 180);
+        opp.hitLeanDir = opp.x >= f.x ? 1 : -1;
+        opp.airborne = false;
+        opp.airH = 0;
+        opp.airV = 0;
+        opp.launchVx = 0;
+        opp.launchVy = 0;
+        spawnFloater(opp.x, opp.y - 170, "僵直", "#cfe0ff");
+        bursts.push({
+          x: opp.x, y: opp.y - 80,
+          life: 0.35, max: 0.35, kind: "impact", facing: opp.facing || 1, scale: 1.5
+        });
       }
     }
   }
@@ -1593,7 +1647,15 @@
       for (sk in f.skills) {
         if (f.skills[sk].cd > 0) f.skills[sk].cd = Math.max(0, f.skills[sk].cd - dt);
       }
-      if (f.chakra < f.maxChakra) f.chakra = Math.min(f.maxChakra, f.chakra + 16 * dt);
+      if (f.hyperArmor > 0) {
+        f.hyperArmor = Math.max(0, f.hyperArmor - dt);
+      }
+      if (f.chakraLock > 0) {
+        f.chakraLock = Math.max(0, f.chakraLock - dt);
+        f.chakra = f.maxChakra;
+      } else if (f.chakra < f.maxChakra) {
+        f.chakra = Math.min(f.maxChakra, f.chakra + 16 * dt);
+      }
       if (f.flash > 0) f.flash = Math.max(0, f.flash - dt);
       if (f.invuln > 0) f.invuln = Math.max(0, f.invuln - dt);
       if (f.phase > 0) {
@@ -2579,9 +2641,32 @@
     drawPainAt(f.x, f.y - (f.airH || 0), f.facing, set, idx, alpha, footDrop, fighterDrawTilt(f), f.hitShake || 0);
   }
 
-  function drawFighter(f) {
+  function drawHyperArmorAura(f) {
+    if (!(f.hyperArmor > 0)) return;
+    var t = time || 0;
+    var pulse = 0.55 + 0.45 * Math.sin(t * 8);
+    var ax = f.x;
+    var ay = f.y - 70 - (f.airH || 0);
+    ctx.save();
+    ctx.globalAlpha = 0.28 + 0.18 * pulse;
+    ctx.strokeStyle = "#ff7a30";
+    ctx.lineWidth = 4;
+    ctx.shadowColor = "#ff9040";
+    ctx.shadowBlur = 18;
+    ctx.beginPath();
+    ctx.ellipse(ax, ay, 52 + pulse * 6, 78 + pulse * 4, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 0.16 + 0.1 * pulse;
+    ctx.fillStyle = "rgba(255,110,40,0.25)";
+    ctx.beginPath();
+    ctx.ellipse(ax, ay, 40, 64, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
 
+  function drawFighter(f) {
     drawGroundShadow(f);
+    drawHyperArmorAura(f);
     if (isObito(f)) {
       drawObito(f);
       return;
@@ -3356,13 +3441,36 @@
     var cw = Math.max(0, bw * cRatio);
     if (cw > 0) {
       var cg = ctx.createLinearGradient(0, by, 0, by + 8);
-      cg.addColorStop(0, "#7ad0ff");
-      cg.addColorStop(0.5, "#2f8fff");
-      cg.addColorStop(1, "#1450c8");
+      if (f.chakraLock > 0) {
+        cg.addColorStop(0, "#c8f0ff");
+        cg.addColorStop(0.5, "#60d0ff");
+        cg.addColorStop(1, "#2080ff");
+      } else {
+        cg.addColorStop(0, "#7ad0ff");
+        cg.addColorStop(0.5, "#2f8fff");
+        cg.addColorStop(1, "#1450c8");
+      }
       ctx.fillStyle = cg;
       if (fromRight) roundRect(bx + bw - cw, by, cw, 8, 3);
       else roundRect(bx, by, cw, 8, 3);
       ctx.fill();
+    }
+    if (f.chakraLock > 0) {
+      ctx.strokeStyle = "rgba(120,220,255,0.85)";
+      ctx.lineWidth = 1.5;
+      roundRect(bx, by, bw, 8, 3);
+      ctx.stroke();
+    }
+    if (f.hyperArmor > 0) {
+      ctx.font = "bold 11px sans-serif";
+      ctx.fillStyle = "#ff9040";
+      ctx.textAlign = fromRight ? "right" : "left";
+      ctx.fillText("霸体 " + Math.ceil(f.hyperArmor) + "s", fromRight ? bx + bw : bx, by + 20);
+    } else if (f.chakraLock > 0) {
+      ctx.font = "bold 11px sans-serif";
+      ctx.fillStyle = "#7ad0ff";
+      ctx.textAlign = fromRight ? "right" : "left";
+      ctx.fillText("回蓝 " + Math.ceil(f.chakraLock) + "s", fromRight ? bx + bw : bx, by + 20);
     }
     ctx.strokeStyle = "rgba(140,190,255,0.35)";
     ctx.lineWidth = 1;
@@ -3746,9 +3854,9 @@
     ctx.font = "12px sans-serif";
     ctx.fillStyle = "rgba(200,220,230,0.75)";
     if (mode === "vs") {
-      ctx.fillText("点密卷：先赋 P1，再赋 P2（也可点左右框后再改）", W / 2, y - 2);
+      ctx.fillText("密卷：霸体 / 回蓝 / 清CD / 驱散 · 先赋左再赋右", W / 2, y - 2);
     } else {
-      ctx.fillText("选择一卷密卷，开战后会出现在技能栏旁", W / 2, y - 2);
+      ctx.fillText("密卷：霸体4秒 · 回蓝锁满10秒 · 清CD · 驱散(僵直+破霸体)", W / 2, y - 2);
     }
     for (i = 0; i < n; i++) {
       var def = SCROLL_DEFS[i];
@@ -3779,14 +3887,13 @@
         ctx.fillStyle = def.color;
         ctx.fill();
       }
+      ctx.font = "bold 12px sans-serif";
+      ctx.fillStyle = picked ? "#3ef0e0" : "rgba(230,240,250,0.85)";
+      ctx.fillText(def.name, cx, cy + iconR + 14);
       if (pickedL || pickedR) {
         ctx.font = "bold 11px sans-serif";
         ctx.fillStyle = "#3ef0e0";
-        ctx.fillText(pickedL && pickedR ? "双" : (pickedL ? "左" : "右"), cx, cy + iconR + 14);
-      } else {
-        ctx.font = "bold 12px sans-serif";
-        ctx.fillStyle = picked ? "#3ef0e0" : "rgba(230,240,250,0.85)";
-        ctx.fillText(def.name, cx, cy + iconR + 14);
+        ctx.fillText(pickedL && pickedR ? "双" : (pickedL ? "左" : "右"), cx, cy + iconR + 28);
       }
       addHit(cx - iconR - 4, cy - iconR - 4, (iconR + 4) * 2, (iconR + 4) * 2 + 16, (function (sid) {
         return function () {
