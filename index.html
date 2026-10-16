@@ -5595,7 +5595,7 @@
       selectedScrollL: selectedScrollL,
       selectedScrollR: selectedScrollR,
       fighters: activeFighters().map(function (f) {
-        return { id: f.id, name: f.name, kit: f.kit, hp: f.hp, hpChip: f.hpChip, x: f.x, y: f.y, team: teamOf(f), airH: f.airH || 0, airborne: !!f.airborne, pullOn: !!f.pullOn, repulseOn: !!f.repulseOn, anim: f.anim, knockPhase: f.knockPhase, knockT: f.knockT || 0, moveSpeed: f.moveSpeed };
+        return { id: f.id, name: f.name, kit: f.kit, hp: f.hp, hpChip: f.hpChip, x: f.x, y: f.y, team: teamOf(f), airH: f.airH || 0, airborne: !!f.airborne, pullOn: !!f.pullOn, repulseOn: !!f.repulseOn, anim: f.anim, knockPhase: f.knockPhase, knockT: f.knockT || 0, moveSpeed: f.moveSpeed, fireForm: !!f.fireForm, barrierT: f.barrierT || 0, chakra: f.chakra };
       }),
       roundWinsL: roundWinsL,
       roundWinsR: roundWinsR,
@@ -5626,6 +5626,33 @@
     practiceNoCdAll = false;
     practiceNoCd = {};
     beginMatch();
+  };
+  window.__DUEL_FORCE_TANJIRO__ = function (opts) {
+    opts = opts || {};
+    gameMode = opts.mode || "practice";
+    selectedChar = "tanjiro";
+    selectedScroll = SCROLL_DEFS[0].id;
+    practiceDummy = true;
+    practiceNoCdAll = !!opts.noCd;
+    practiceNoCd = {};
+    beginMatch();
+    // Skip countdown into fight
+    matchState = "fight";
+    countdownPhase = "fight";
+    countLeft = 0;
+    return window.__DUEL_DEBUG__();
+  };
+  window.__DUEL_CAST__ = function (fid, skillId) {
+    var f = activeFighters().filter(function (x) { return x.id === fid; })[0];
+    if (!f) return false;
+    tryCast(f, skillId);
+    return { anim: f.anim, fireForm: !!f.fireForm, busy: f.busy, chakra: f.chakra, kit: f.kit };
+  };
+  window.__DUEL_WAIT_FIGHT__ = function () {
+    matchState = "fight";
+    countdownPhase = "fight";
+    countLeft = 0;
+    return matchState;
   };
   window.__DUEL_FORCE_FIGHT__ = function () {
     gameMode = "ai";
