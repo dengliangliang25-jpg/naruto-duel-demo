@@ -59,7 +59,12 @@
   var countLeft = 3;
   var matchTime = 60;
   var matchResult = null;
-  var gameMode = "ai"; // ai | vs | coop
+  var gameMode = "ai"; // ai | vs | coop | practice
+  var practiceDummy = true; // passive dummy vs light AI
+  var practiceNoCdAll = false;
+  var practiceNoCd = {}; // skillId -> bool
+  var practicePanel = false;
+  var countdownPhase = "round"; // round | fight
   var playerSide = "L"; // which side the human controls in AI mode
   var coopAiKits = ["pain", "obito"]; // filled on beginMatch
   var selectedChar = "obito"; // roster id chosen in char select (solo)
@@ -76,22 +81,22 @@
     var i;
     for (i = 0; i < ids.length; i++) {
       var img = new Image();
-      img.src = "cards/" + ids[i] + ".png?v=" + "pages16";
+      img.src = "cards/" + ids[i] + ".png?v=" + "pages18";
       cardImgs[ids[i]] = img;
     }
   })();
   var SCROLL_DEFS = [
-    { id: "scroll_quake", name: "霸体", role: "密卷", color: "#e07030", icon: "icons/icon_01.png", max: 14, cost: 18, dmg: 0 },
-    { id: "scroll_bolt", name: "回蓝", role: "密卷", color: "#40c0ff", icon: "icons/icon_02.png", max: 16, cost: 0, dmg: 0 },
-    { id: "scroll_blade", name: "清CD", role: "密卷", color: "#f0c040", icon: "icons/icon_03.png", max: 18, cost: 12, dmg: 0 },
-    { id: "scroll_gale", name: "驱散", role: "密卷", color: "#5080ff", icon: "icons/icon_04.png", max: 12, cost: 16, dmg: 0 }
+    { id: "scroll_quake", name: "霸体", role: "密卷", color: "#e07030", icon: "icons/icon_01.png", max: 18.2, cost: 18, dmg: 0 },
+    { id: "scroll_bolt", name: "回蓝", role: "密卷", color: "#40c0ff", icon: "icons/icon_02.png", max: 20.8, cost: 0, dmg: 0 },
+    { id: "scroll_blade", name: "清CD", role: "密卷", color: "#f0c040", icon: "icons/icon_03.png", max: 23.4, cost: 12, dmg: 0 },
+    { id: "scroll_gale", name: "驱散", role: "密卷", color: "#5080ff", icon: "icons/icon_04.png", max: 15.6, cost: 16, dmg: 0 }
   ];
   var scrollImgs = {};
   (function loadScrolls() {
     var i;
     for (i = 0; i < SCROLL_DEFS.length; i++) {
       var img = new Image();
-      img.src = SCROLL_DEFS[i].icon + "?v=" + "pages16";
+      img.src = SCROLL_DEFS[i].icon + "?v=" + "pages18";
       scrollImgs[SCROLL_DEFS[i].id] = img;
     }
   })();
@@ -128,7 +133,7 @@
   var flowHint = document.getElementById("flowHint");
   var charRoster = [
     { id: "obito", name: "带土", unlocked: true, blurb: "虚化 · 喷火 · 空间" },
-    { id: "pain", name: "橙发", unlocked: true, blurb: "黑棒 · 气盾 · 吸引" },
+    { id: "pain", name: "佩恩天道", unlocked: true, blurb: "黑棒 · 气盾 · 吸引" },
     { id: "lockA", name: "影", unlocked: false, blurb: "即将开放" },
     { id: "lockB", name: "焰", unlocked: false, blurb: "即将开放" },
     { id: "lockC", name: "岚", unlocked: false, blurb: "即将开放" },
@@ -150,7 +155,7 @@
   sharinganImg.src = "sharingan.png";
 
   // Bump when sprite PNGs change so browsers/CDN do not serve stale frames.
-  var ASSET_V = "pages17";
+  var ASSET_V = "pages18";
   function loadStrip(prefix, count, folder) {
     var arr = [];
     var i;
@@ -172,8 +177,19 @@
     phase: loadStrip("phase", 8),
     tele: loadStrip("tele", 8),
     punch: loadStrip("punch", 8),
-    cloth: loadStrip("cloth", 12, "obito/cloth_float")
+    cloth: loadStrip("cloth", 12, "obito/cloth_float"),
+    knock: loadStrip("knock", 16, "obito/knockdown")
   };
+  var portraitImgs = {};
+  (function loadPortraits() {
+    var ids = ["obito", "pain"];
+    var i;
+    for (i = 0; i < ids.length; i++) {
+      var img = new Image();
+      img.src = "portraits/" + ids[i] + ".png?v=" + ASSET_V;
+      portraitImgs[ids[i]] = img;
+    }
+  })();
   // Body-height match (obito 180px, pain 143px) then both shrunk by the same
   // 0.72, then another 0.88 (same for both) so they sit smaller on the expanded field.
   // Foot pads stay in source px and are multiplied by these scales, so the shared
@@ -189,6 +205,32 @@
   // Per-idle-frame transparent rows under soles (source px). Used to keep feet planted while idle cycles.
   var obitoIdleFootPads = [2, 2, 2, 2, 2, 2, 2, 2];
   var painIdleFootPads = [21, 21, 21, 24, 24, 19];
+  var painFootPads = {
+    idle: [21, 21, 21, 24, 24, 19],
+    cloth: [21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21],
+    walk: [18, 20, 18, 18, 19, 20],
+    run: [27, 21, 21, 24, 22, 19],
+    dash: [18, 34, 21, 21, 18, 19],
+    back: [20, 19, 18, 21, 22, 19],
+    combo: [21, 21, 21, 21, 21, 18],
+    kick: [20, 21, 21, 21, 21, 17],
+    rod: [25, 25, 27, 29, 24, 17],
+    push: [18, 19, 17, 17, 18, 18],
+    turn: [18, 17, 23, 23, 19, 23],
+    land: [21, 21, 21, 21, 19, 18],
+    jump: [19, 20, 18, 18, 18, 18]
+  };
+  // Clamp action pads toward idle sole so feet stay planted (ignore sheet float/crop errors).
+  (function clampPainPads() {
+    var ref = 21;
+    var k, i, arr;
+    for (k in painFootPads) {
+      arr = painFootPads[k];
+      for (i = 0; i < arr.length; i++) {
+        if (Math.abs(arr[i] - ref) > 12) arr[i] = ref;
+      }
+    }
+  })();
   // Drop pain so its feet share obito's ground line (pain has more empty rows under the sandals).
   var painFootDrop = painIdleFootPad * painScale - obitoIdleFootPad * obitoScale;
   // Lowest-opaque row gap under each tele frame (source px). Larger than idle means the art floats.
@@ -307,6 +349,11 @@
       downMax: 0,
       getUpT: 0,
       getUpMax: 0,
+      knockPhase: null,
+      knockT: 0,
+      hpChip: 100,
+      barDmg: 0,
+      barDmgT: 0,
       phase: 0,
       armor: 0,
       hyperArmor: 0,
@@ -325,7 +372,7 @@
     deep: "#14182c",
     hot: "#f0d2c0"
   });
-  var right = makeFighter("R", "橙发", 860, {
+  var right = makeFighter("R", "佩恩天道", 860, {
     body: "#2c2428",
     trim: "#ff7a3a",
     glow: "#ffb067",
@@ -334,23 +381,23 @@
   });
   left.kit = "obito";
   right.kit = "pain";
-  left.moveSpeed = 420;
-  right.moveSpeed = 336;
+  left.moveSpeed = 546;
+  right.moveSpeed = 437;
 
   left.skills = {
-    punch: { key: "Q", name: "掌击", role: "突进", cd: 0, max: 0.7, cost: 0 },
-    phase: { key: "E", name: "虚化", role: "灵体", cd: 0, max: 6, cost: 30 },
-    tele: { key: "R", name: "传送", role: "突进", cd: 0, max: 1.15, cost: 16 },
-    breath: { key: "F", name: "喷火", role: "远程", cd: 0, max: 1.7, cost: 22 },
+    punch: { key: "Q", name: "掌击", role: "突进", cd: 0, max: 0.91, cost: 0 },
+    phase: { key: "E", name: "虚化", role: "灵体", cd: 0, max: 7.8, cost: 30 },
+    tele: { key: "R", name: "传送", role: "突进", cd: 0, max: 1.495, cost: 16 },
+    breath: { key: "F", name: "喷火", role: "远程", cd: 0, max: 2.21, cost: 22 },
     space: { key: "C", name: "切空间", role: "空间", cd: 0, max: 0, cost: 0 }
   };
   right.skills = {
-    thrust: { key: "U", name: "连击", role: "平A", cd: 0, max: 0.78, cost: 0 },
-    fire: { key: "I", name: "黑棒", role: "远程", cd: 0, max: 1.15, cost: 18 },
-    swap: { key: "O", name: "后撤", role: "闪避", cd: 0, max: 1.2, cost: 10 },
-    spike: { key: "P", name: "气盾", role: "绝技", cd: 0, max: 8, cost: 28 },
-    pull: { key: "J", name: "吸引", role: "控制", cd: 0, max: 2.6, cost: 18 },
-    cleave: { key: "K", name: "重脚", role: "平A", cd: 0, max: 0.9, cost: 8 }
+    thrust: { key: "U", name: "连击", role: "平A", cd: 0, max: 1.014, cost: 0 },
+    fire: { key: "I", name: "黑棒", role: "远程", cd: 0, max: 1.495, cost: 18 },
+    swap: { key: "O", name: "后撤", role: "闪避", cd: 0, max: 1.56, cost: 10 },
+    spike: { key: "P", name: "气盾", role: "绝技", cd: 0, max: 10.4, cost: 28 },
+    pull: { key: "J", name: "吸引", role: "控制", cd: 0, max: 3.38, cost: 18 },
+    cleave: { key: "K", name: "重脚", role: "平A", cd: 0, max: 1.17, cost: 8 }
   };
 
 
@@ -362,7 +409,7 @@
     deep: "#14182c",
     hot: "#f0d2c0"
   });
-  var right2 = makeFighter("R2", "橙发", 940, {
+  var right2 = makeFighter("R2", "佩恩天道", 940, {
     body: "#2c2428",
     trim: "#ff7a3a",
     glow: "#ffb067",
@@ -371,8 +418,8 @@
   });
   left2.kit = "obito";
   right2.kit = "pain";
-  left2.moveSpeed = 420;
-  right2.moveSpeed = 336;
+  left2.moveSpeed = 546;
+  right2.moveSpeed = 437;
   left2.skills = {};
   right2.skills = {};
 
@@ -385,30 +432,30 @@
     obito: {
       name: "带土",
       weapon: "blade",
-      speed: 420,
+      speed: 546,
       palette: { body: "#24315c", trim: "#e8e4f2", glow: "#9eb6ff", deep: "#14182c", hot: "#f0d2c0" },
       order: ["punch", "phase", "tele", "breath", "space"],
       skills: {
-        punch: { key: "Q", name: "掌击", role: "突进", cd: 0, max: 0.7, cost: 0 },
-        phase: { key: "E", name: "虚化", role: "灵体", cd: 0, max: 6, cost: 30 },
-        tele: { key: "R", name: "传送", role: "突进", cd: 0, max: 1.15, cost: 16 },
-        breath: { key: "F", name: "喷火", role: "远程", cd: 0, max: 1.7, cost: 22 },
+        punch: { key: "Q", name: "掌击", role: "突进", cd: 0, max: 0.91, cost: 0 },
+        phase: { key: "E", name: "虚化", role: "灵体", cd: 0, max: 7.8, cost: 30 },
+        tele: { key: "R", name: "传送", role: "突进", cd: 0, max: 1.495, cost: 16 },
+        breath: { key: "F", name: "喷火", role: "远程", cd: 0, max: 2.21, cost: 22 },
         space: { key: "C", name: "切空间", role: "空间", cd: 0, max: 0, cost: 0 }
       }
     },
     pain: {
-      name: "橙发",
+      name: "佩恩天道",
       weapon: "spear",
-      speed: 336,
+      speed: 437,
       palette: { body: "#2c2428", trim: "#ff7a3a", glow: "#ffb067", deep: "#1a1214", hot: "#ff8a3a" },
       order: ["thrust", "fire", "swap", "spike", "pull", "cleave"],
       skills: {
-        thrust: { key: "U", name: "连击", role: "平A", cd: 0, max: 0.78, cost: 0 },
-        fire: { key: "I", name: "黑棒", role: "远程", cd: 0, max: 1.15, cost: 18 },
-        swap: { key: "O", name: "后撤", role: "闪避", cd: 0, max: 1.2, cost: 10 },
-        spike: { key: "P", name: "气盾", role: "绝技", cd: 0, max: 8, cost: 28 },
-        pull: { key: "J", name: "吸引", role: "控制", cd: 0, max: 2.6, cost: 18 },
-        cleave: { key: "K", name: "重脚", role: "平A", cd: 0, max: 0.9, cost: 8 }
+        thrust: { key: "U", name: "连击", role: "平A", cd: 0, max: 1.014, cost: 0 },
+        fire: { key: "I", name: "黑棒", role: "远程", cd: 0, max: 1.495, cost: 18 },
+        swap: { key: "O", name: "后撤", role: "闪避", cd: 0, max: 1.56, cost: 10 },
+        spike: { key: "P", name: "气盾", role: "绝技", cd: 0, max: 10.4, cost: 28 },
+        pull: { key: "J", name: "吸引", role: "控制", cd: 0, max: 3.38, cost: 18 },
+        cleave: { key: "K", name: "重脚", role: "平A", cd: 0, max: 1.17, cost: 8 }
       }
     }
   };
@@ -736,6 +783,11 @@
     f.downMax = 0;
     f.getUpT = 0;
     f.getUpMax = 0;
+    f.knockPhase = null;
+    f.knockT = 0;
+    f.hpChip = f.maxHp;
+    f.barDmg = 0;
+    f.barDmgT = 0;
     f.hitPending = false;
     f.aiIx = 0;
     f.aiIy = 0;
@@ -845,25 +897,20 @@
     opts = opts || {};
     if (koId || target.hp <= 0 || target.invuln > 0 || target.phase > 0 || target.shield > 0) return false;
     if (isDowned(target) && !opts.fromImpact) return false;
+    amount = Math.max(1, Math.round(amount * 2 / 3));
     var hyper = (target.hyperArmor || 0) > 0 && !opts.ignoreArmor;
     target.hp = Math.max(0, target.hp - amount);
-    target.flash = 0.16;
+    target.flash = 0;
     target.hurt = 0.14;
+    target.hpChip = Math.min(target.maxHp, Math.max(target.hpChip != null ? target.hpChip : target.maxHp, target.hp + amount));
+    target.barDmg = amount;
+    target.barDmgT = 0.85;
     shake = Math.min(14, shake + 4.5 + Math.min(4, amount * 0.12));
     spawnFloater(target.x + (Math.random() * 16 - 8), target.y - 148 - (target.airH || 0), String(amount), color);
     if (hyper) {
       // 霸体: take damage, keep acting; immune to stun / knockback / launch from normal hits.
       // Grab/pull still moves the target via castPull (does not rely on hurt launch).
       spawnFloater(target.x + (Math.random() * 10 - 5), target.y - 178 - (target.airH || 0), "霸体", "#e07030");
-      bursts.push({
-        x: target.x,
-        y: target.y - 86 - (target.airH || 0),
-        life: 0.18,
-        max: 0.18,
-        kind: "flash",
-        facing: target.facing || 1,
-        scale: 1.1
-      });
       if (target.hp <= 0) onFighterKilled(target);
       return true;
     }
@@ -879,39 +926,8 @@
     if (!opts.noLaunch) {
       spawnFloater(target.x + (Math.random() * 10 - 5), target.y - 178 - (target.airH || 0), "僵直", "#ffe7a0");
     }
-    bursts.push({
-      x: target.x + (Math.random() * 20 - 10),
-      y: target.y - 78 - (target.airH || 0) + (Math.random() * 16 - 8),
-      life: 0.28,
-      max: 0.28,
-      kind: "impact",
-      facing: 1,
-      scale: 1.15 + Math.min(0.9, amount * 0.04)
-    });
-    bursts.push({
-      x: target.x,
-      y: target.y - 86 - (target.airH || 0),
-      life: 0.18,
-      max: 0.18,
-      kind: "flash",
-      facing: target.facing || 1,
-      scale: 1.2
-    });
+    // Hit flash / sparkle removed; damage numbers kept via floaters.
     var i;
-    for (i = 0; i < 16; i++) {
-      var ang = Math.random() * Math.PI * 2;
-      var spd = 180 + Math.random() * 320;
-      sparks.push({
-        x: target.x + (Math.random() * 24 - 12),
-        y: target.y - 80 - (target.airH || 0) + (Math.random() * 30 - 15),
-        vx: Math.cos(ang) * spd,
-        vy: Math.sin(ang) * spd * 0.75 - 60,
-        life: 0.32 + Math.random() * 0.28,
-        max: 0.55,
-        color: i % 3 === 0 ? "#fff6d0" : color,
-        size: 3 + Math.random() * 5
-      });
-    }
     if (!opts.noLaunch) {
       var atk = other(target);
       var dx = target.x - atk.x;
@@ -936,6 +952,8 @@
         target.hitPushVy = 0;
         target.downT = 0;
         target.getUpT = 0;
+        target.knockPhase = "air";
+        target.knockT = 0;
         spawnFloater(target.x, target.y - 200, "击飞", "#ffd0a0");
       } else {
         // Light: grounded lean-back stagger, small slide, no vertical launch.
@@ -978,31 +996,9 @@
       facing: 1,
       scale: 1.6 + impactDmg * 0.06
     });
-    bursts.push({
-      x: f.x,
-      y: f.y - 30,
-      life: 0.22,
-      max: 0.22,
-      kind: "flash",
-      facing: f.facing || 1,
-      scale: 1.4
-    });
     rings.push({ x: f.x, y: f.y, life: 0.35, max: 0.35, color: "#e8dcc0" });
-    var si;
-    for (si = 0; si < 12; si++) {
-      var sang = Math.random() * Math.PI * 2;
-      var sspd = 90 + Math.random() * 180;
-      sparks.push({
-        x: f.x + (Math.random() * 30 - 15),
-        y: f.y - 8,
-        vx: Math.cos(sang) * sspd,
-        vy: Math.sin(sang) * sspd * 0.35 - 40,
-        life: 0.28 + Math.random() * 0.2,
-        max: 0.5,
-        color: si % 2 === 0 ? "#d8c8a0" : "#fff4d0",
-        size: 3 + Math.random() * 4
-      });
-    }
+    f.knockPhase = "down";
+    f.knockT = 0;
     hurt(f, impactDmg, "#ffe7a0", { noLaunch: true, fromImpact: true });
     spawnFloater(f.x, f.y - 160, "落地 " + impactDmg, "#ffc878");
     // Knockdown: shorter hard-flat, smoother get-up. Invulnerable through both.
@@ -1128,7 +1124,7 @@
         selectedScrollR || SCROLL_DEFS[1].id
       );
     } else {
-      // Solo: player picks one unlocked kit; opponent gets the other unlocked kit.
+      // Solo / practice: player picks one unlocked kit; opponent gets the other.
       var humanKit = selectedChar || "obito";
       var aiKit = humanKit === "obito" ? "pain" : "obito";
       var humanScroll = selectedScroll || SCROLL_DEFS[0].id;
@@ -1147,13 +1143,34 @@
   function beginCountdown() {
     reset();
     matchState = "countdown";
-    countLeft = 3;
-    matchTime = 60;
+    countdownPhase = "round";
+    countLeft = 1.35;
+    matchTime = (gameMode === "practice") ? 99999 : 60;
     matchResult = null;
     koId = null;
     paused = false;
     roundEndLeft = 0;
     syncFlowHint();
+  }
+
+  function roundBannerText() {
+    if (gameMode === "practice") return "练习";
+    if (roundIndex >= 3) return "最终回";
+    if (roundIndex === 1) return "第一回";
+    if (roundIndex === 2) return "第二回";
+    return "第" + roundIndex + "回";
+  }
+
+  function skillNoCd(f, id) {
+    if (gameMode !== "practice") return false;
+    if (practiceNoCdAll) return true;
+    return !!(practiceNoCd && practiceNoCd[id]);
+  }
+
+  function applySkillCd(f, sk, id) {
+    if (!sk) return;
+    if (skillNoCd(f, id)) { sk.cd = 0; return; }
+    sk.cd = sk.max * ((voidSpace && isObito(f)) ? 0.65 : 1);
   }
 
   function finishMatch(result) {
@@ -1167,6 +1184,10 @@
   function finishRound(result) {
     if (matchState !== "fight") return;
     matchResult = result;
+    if (gameMode === "practice") {
+      finishMatch(result === "draw" ? "draw" : result);
+      return;
+    }
     if (result === "L") roundWinsL += 1;
     else if (result === "R") roundWinsR += 1;
     if (roundWinsL >= 2 || roundWinsR >= 2 || roundIndex >= 3) {
@@ -1234,12 +1255,12 @@
     if (id === "phase" || id === "needle") {
       castNeedle(f);
       f.chakra -= sk.cost || 0;
-      sk.cd = sk.max * ((voidSpace && isObito(f)) ? 0.65 : 1);
+      applySkillCd(f, sk, id);
       return;
     }
     if (f.busy > 0 || f.dashT > 0) return;
     f.chakra -= sk.cost || 0;
-    sk.cd = sk.max * ((voidSpace && isObito(f)) ? 0.65 : 1);
+    applySkillCd(f, sk, id);
     if (id === "punch") beginMelee(f, "punch", 0.56, 0.24);
     else if (id === "slash") beginMelee(f, "slash", 0.28, 0.08);
     else if (id === "thrust") beginMelee(f, "combo", 0.72, 0.22, 0.48);
@@ -1530,7 +1551,7 @@
   }
 
   function palmOf(f) {
-    return { x: f.x + f.facing * 58 * painScale, y: f.y - 108 * painScale };
+    return { x: f.x + f.facing * 78 * painScale, y: f.y - 108 * painScale };
   }
 
   function shieldAxes() {
@@ -1789,7 +1810,7 @@
       if (keysDown.ArrowUp) iy -= 1;
       if (keysDown.ArrowDown) iy += 1;
       // Mobile: human-as-Pain uses left stick; VS uses right stick.
-      if (gameMode === "ai" && playerSide === "R") {
+      if ((gameMode === "ai" || gameMode === "practice") && playerSide === "R") {
         ix += sticks[0].nx;
         iy += sticks[0].ny;
       } else {
@@ -1805,7 +1826,7 @@
     }
     f.gait = "run";
     var len = Math.sqrt(ix * ix + iy * iy);
-    var speed = f.moveSpeed || (isObito(f) ? 420 : 336);
+    var speed = f.moveSpeed || (isObito(f) ? 546 : 437);
     var step = clampSpot(f.x + ix / len * speed * dt, f.y + iy / len * speed * dt);
     f.x = step.x;
     f.y = step.y;
@@ -1813,7 +1834,7 @@
 
   function updateOneAI(f, dt) {
     if (!f || f.hp <= 0) return;
-    var opp = isCoop() ? nearestHuman(f) : (gameMode === "ai" ? humanFighter() : nearestEnemy(f));
+    var opp = isCoop() ? nearestHuman(f) : ((gameMode === "ai" || gameMode === "practice") ? humanFighter() : nearestEnemy(f));
     if (!opp) return;
     if ((f.stun || 0) > 0 || f.rooted > 0 || f.pullT > 0 || isAirborne(f) || isDowned(f)) {
       f.aiIx = 0;
@@ -1904,6 +1925,11 @@
   function updateAI(dt) {
     if (matchState !== "fight" || koId) return;
     if (gameMode === "vs") return;
+    if (gameMode === "practice" && practiceDummy) {
+      var dum = aiFighter();
+      if (dum) { dum.aiIx = 0; dum.aiIy = 0; }
+      return;
+    }
     if (gameMode === "coop") {
       updateOneAI(right, dt);
       updateOneAI(right2, dt);
@@ -1938,7 +1964,7 @@
         f.chakraLock = Math.max(0, f.chakraLock - dt);
         f.chakra = f.maxChakra;
       } else if (f.chakra < f.maxChakra) {
-        f.chakra = Math.min(f.maxChakra, f.chakra + 16 * dt);
+        f.chakra = Math.min(f.maxChakra, f.chakra + 11.2 * dt);
       }
       if (f.flash > 0) f.flash = Math.max(0, f.flash - dt);
       if (f.invuln > 0) f.invuln = Math.max(0, f.invuln - dt);
@@ -1951,7 +1977,7 @@
         f.armor -= dt;
         if (f.armor <= 0) {
           f.armor = 0;
-          if (f.skills.spike) f.skills.spike.cd = f.skills.spike.max;
+          if (f.skills.spike) applySkillCd(f, f.skills.spike, "spike");
         }
       }
       if (f.pullOn) {
@@ -2032,9 +2058,22 @@
       if (f.stun > 0) f.stun = Math.max(0, f.stun - dt);
       if (f.busy > 0) f.busy = Math.max(0, f.busy - dt);
       if (f.hitShake > 0) f.hitShake = Math.max(0, f.hitShake - dt);
+      if (f.barDmgT > 0) f.barDmgT = Math.max(0, f.barDmgT - dt);
+      if (f.hpChip == null) f.hpChip = f.hp;
+      if (f.hpChip > f.hp) {
+        f.hpChip = Math.max(f.hp, f.hpChip - f.maxHp * 0.55 * dt);
+      } else {
+        f.hpChip = f.hp;
+      }
+      if (f.knockPhase) f.knockT = (f.knockT || 0) + dt;
+      if (f.knockPhase === "down" && !isDowned(f) && !isAirborne(f)) {
+        f.knockPhase = null;
+        f.knockT = 0;
+      }
 
-      // Skill casters keep both feet on the ground (no launch/jump offsets mid-cast).
+      // Skill casters / Pain actions keep both feet on the ground.
       if (f.pullOn || f.repulseOn || (f.shieldWind || 0) > 0) plantCaster(f);
+      if (isPain(f) && (f.busy > 0 || f.anim === "combo" || f.anim === "kick" || f.anim === "rod" || f.anim === "push" || f.anim === "back" || f.anim === "pull" || f.anim === "cast")) plantCaster(f);
       if (isAirborne(f)) {
         f.dashT = 0;
         f.gait = "idle";
@@ -2777,7 +2816,18 @@
     var idx = 0;
     var alpha = 1;
     var reacting = isAirborne(f) || isDowned(f) || ((f.stun || 0) > 0 && f.hitLight);
-    if (reacting) {
+    if ((f.knockPhase === "air" || isAirborne(f)) && obito.knock && obito.knock[0] && obito.knock[0].complete) {
+      set = obito.knock;
+      idx = Math.min(10, Math.floor((f.knockT || 0) * 18));
+    } else if ((f.knockPhase === "down" || isDowned(f)) && obito.knock && obito.knock[0] && obito.knock[0].complete) {
+      set = obito.knock;
+      var kt = f.knockT || 0;
+      if (kt < 0.12) idx = 11;
+      else if (kt < 0.28) idx = 12;
+      else if (kt < 0.45) idx = 13;
+      else if (kt < 0.65) idx = 14;
+      else idx = 15;
+    } else if (reacting) {
       set = obito.idle;
       idx = 0;
     } else if (f.anim === "tele") {
@@ -2988,12 +3038,29 @@
     }
     if (f.invuln > 0 && !isDowned(f) && !isAirborne(f) && Math.sin(time * 40) > 0) alpha *= 0.45;
     var footDrop = 0;
-    if (set === pain.idle) {
-      var ppad = painIdleFootPads[idx];
-      if (ppad == null) ppad = painIdleFootPads[0];
-      footDrop = (ppad - painIdleFootPads[0]) * painScale / painFrameScale;
+    var padKey = null;
+    if (set === pain.idle) padKey = "idle";
+    else if (set === pain.cloth) padKey = "cloth";
+    else if (set === pain.walk) padKey = "walk";
+    else if (set === pain.run) padKey = "run";
+    else if (set === pain.dash) padKey = "dash";
+    else if (set === pain.back) padKey = "back";
+    else if (set === pain.combo) padKey = "combo";
+    else if (set === pain.kick) padKey = "kick";
+    else if (set === pain.rod) padKey = "rod";
+    else if (set === pain.push) padKey = "push";
+    else if (set === pain.turn) padKey = "turn";
+    else if (set === pain.land) padKey = "land";
+    else if (set === pain.jump) padKey = "jump";
+    if (padKey && painFootPads[padKey]) {
+      var ppad = painFootPads[padKey][idx];
+      if (ppad == null) ppad = painFootPads[padKey][0];
+      footDrop = (ppad - 21) * painScale / painFrameScale;
     }
-    drawPainAt(f.x, f.y - (f.airH || 0), f.facing, set, idx, alpha, footDrop, fighterDrawTilt(f), f.hitShake || 0);
+    // Pain skills/actions: never float on airH
+    var drawAir = (f.airH || 0);
+    if (f.pullOn || f.repulseOn || f.busy > 0 || f.anim === "combo" || f.anim === "kick" || f.anim === "rod" || f.anim === "push" || f.anim === "back" || f.anim === "pull") drawAir = 0;
+    drawPainAt(f.x, f.y - drawAir, f.facing, set, idx, alpha, footDrop, fighterDrawTilt(f), f.hitShake || 0);
   }
 
   function drawHyperArmorAura(f) {
@@ -3457,7 +3524,7 @@
     var ax = palm.x;
     var ay = palm.y;
     if (fi < 8) {
-      ax = f.x + f.facing * 36 * painScale;
+      ax = f.x + f.facing * 56 * painScale;
       ay = f.y - 100 * painScale;
     }
     var dw = img.width * pullFxScale;
@@ -3703,26 +3770,24 @@
     ctx.shadowBlur = 0;
     ctx.beginPath();
     ctx.arc(cx, cy, 26, 0, Math.PI * 2);
-    var g = ctx.createRadialGradient(cx - 6, cy - 8, 4, cx, cy, 26);
-    g.addColorStop(0, f.palette.hot);
-    g.addColorStop(0.55, f.palette.body);
-    g.addColorStop(1, f.palette.deep);
-    ctx.fillStyle = g;
-    ctx.fill();
-    ctx.fillStyle = "#1a1210";
+    ctx.save();
+    ctx.clip();
+    var pimg = portraitImgs[f.kit];
+    if (pimg && pimg.complete && pimg.naturalWidth > 0) {
+      ctx.drawImage(pimg, cx - 26, cy - 26, 52, 52);
+    } else {
+      var g = ctx.createRadialGradient(cx - 6, cy - 8, 4, cx, cy, 26);
+      g.addColorStop(0, f.palette.hot);
+      g.addColorStop(0.55, f.palette.body);
+      g.addColorStop(1, f.palette.deep);
+      ctx.fillStyle = g;
+      ctx.fill();
+    }
+    ctx.restore();
     ctx.beginPath();
-    ctx.arc(cx - 7, cy - 2, 3.1, 0, Math.PI * 2);
-    ctx.arc(cx + 7, cy - 2, 3.1, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = f.palette.glow;
-    ctx.beginPath();
-    ctx.arc(cx - 7, cy - 2, 1.4, 0, Math.PI * 2);
-    ctx.arc(cx + 7, cy - 2, 1.4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = f.palette.trim;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(cx, cy + 4, 9, 0.15, Math.PI - 0.15);
+    ctx.arc(cx, cy, 26, 0, Math.PI * 2);
+    ctx.strokeStyle = "rgba(255,255,255,0.18)";
+    ctx.lineWidth = 1.5;
     ctx.stroke();
     ctx.restore();
   }
@@ -3737,8 +3802,16 @@
     ctx.fillStyle = "rgba(48, 10, 10, 0.95)";
     roundRect(hx, y, w, hh, 4);
     ctx.fill();
+    var chipRatio = f.maxHp > 0 ? (f.hpChip != null ? f.hpChip : f.hp) / f.maxHp : 0;
     var ratio = f.maxHp > 0 ? f.hp / f.maxHp : 0;
+    var cwChip = Math.max(0, w * chipRatio);
     var hw = Math.max(0, w * ratio);
+    if (cwChip > hw + 0.5) {
+      ctx.fillStyle = "rgba(255,255,255,0.88)";
+      if (fromRight) roundRect(hx + w - cwChip, y, cwChip, hh, 4);
+      else roundRect(hx, y, cwChip, hh, 4);
+      ctx.fill();
+    }
     if (hw > 0) {
       var hg = ctx.createLinearGradient(0, y, 0, y + hh);
       hg.addColorStop(0, "#ff6b5a");
@@ -3751,6 +3824,20 @@
       ctx.fillStyle = "rgba(255,255,255,0.22)";
       if (fromRight) ctx.fillRect(hx + w - hw, y + 2, hw, 3);
       else ctx.fillRect(hx, y + 2, hw, 3);
+    }
+    if ((f.barDmgT || 0) > 0 && f.barDmg) {
+      var a = Math.min(1, f.barDmgT / 0.35);
+      ctx.globalAlpha = a;
+      ctx.font = "bold 14px sans-serif";
+      ctx.fillStyle = "#fff6e0";
+      ctx.strokeStyle = "rgba(40,10,10,0.75)";
+      ctx.lineWidth = 3;
+      ctx.textAlign = fromRight ? "left" : "right";
+      var tx = fromRight ? hx + w + 8 : hx - 8;
+      var ty = y + 13;
+      ctx.strokeText("-" + f.barDmg, tx, ty);
+      ctx.fillText("-" + f.barDmg, tx, ty);
+      ctx.globalAlpha = 1;
     }
     ctx.strokeStyle = "rgba(255,220,180,0.35)";
     ctx.lineWidth = 1.5;
@@ -3902,13 +3989,25 @@
   }
 
   function drawTimer() {
+    ctx.textAlign = "center";
+    if (gameMode === "practice") {
+      ctx.font = "bold 18px sans-serif";
+      ctx.fillStyle = "#3ef0e0";
+      ctx.fillText("练习模式", W / 2, 28);
+      ctx.font = "bold 42px sans-serif";
+      ctx.lineWidth = 7;
+      ctx.strokeStyle = "rgba(48, 18, 12, 0.88)";
+      ctx.strokeText("∞", W / 2, 88);
+      ctx.fillStyle = "#fff8f0";
+      ctx.fillText("∞", W / 2, 88);
+      return;
+    }
     var secs = 60;
     if (matchState === "fight" || matchState === "result" || matchState === "roundEnd") secs = Math.ceil(matchTime);
     if (secs < 0) secs = 0;
-    ctx.textAlign = "center";
     ctx.font = "bold 16px sans-serif";
     ctx.fillStyle = "#e4453a";
-    ctx.fillText("第" + roundIndex + "回", W / 2, 22);
+    ctx.fillText(roundBannerText(), W / 2, 22);
     ctx.font = "bold 14px sans-serif";
     ctx.fillStyle = "#f4efe6";
     ctx.fillText(roundWinsL + " : " + roundWinsR, W / 2, 40);
@@ -3918,6 +4017,52 @@
     ctx.strokeText(String(secs), W / 2, 92);
     ctx.fillStyle = (matchState === "fight" && secs <= 10) ? "#ffb067" : "#fff8f0";
     ctx.fillText(String(secs), W / 2, 92);
+  }
+
+  function drawPracticePanel() {
+    if (gameMode !== "practice" || matchState !== "fight") return;
+    var bx = W / 2 - 210;
+    var by = H - 168;
+    // toggle button
+    flowButton(W / 2 - 70, H - 52, 140, 34, practicePanel ? "关闭设置" : "练习设置", true, function () {
+      practicePanel = !practicePanel;
+    });
+    if (!practicePanel) return;
+    panelBox(bx, by - 10, 420, 118);
+    ctx.textAlign = "left";
+    ctx.font = "bold 14px sans-serif";
+    ctx.fillStyle = "#f4efe6";
+    ctx.fillText("技能冷却", bx + 16, by + 18);
+    flowButton(bx + 100, by + 2, 90, 26, practiceNoCdAll ? "全无CD" : "全有CD", true, function () {
+      practiceNoCdAll = !practiceNoCdAll;
+      if (practiceNoCdAll) {
+        var f0 = humanFighter();
+        var id0;
+        for (id0 in f0.skills) practiceNoCd[id0] = true;
+      } else {
+        practiceNoCd = {};
+      }
+    });
+    flowButton(bx + 200, by + 2, 100, 26, practiceDummy ? "木桩呆立" : "人机进攻", false, function () {
+      practiceDummy = !practiceDummy;
+    });
+    var f = humanFighter();
+    var order = (f.id === "L" || f.id === "L2") ? leftOrder : rightOrder;
+    var i;
+    for (i = 0; i < order.length; i++) {
+      var sid = order[i];
+      var sk = f.skills[sid];
+      if (!sk) continue;
+      var on = practiceNoCdAll || practiceNoCd[sid];
+      var x = bx + 14 + (i % 5) * 80;
+      var y = by + 40 + Math.floor(i / 5) * 36;
+      flowButton(x, y, 74, 28, sk.name + (on ? "·无" : "·有"), on, (function (id) {
+        return function () {
+          practiceNoCdAll = false;
+          practiceNoCd[id] = !practiceNoCd[id];
+        };
+      })(sid));
+    }
   }
 
   function panelBox(x, y, w, h) {
@@ -3955,7 +4100,7 @@
   }
 
   function drawIntroScreen() {
-    panelBox(W / 2 - 340, 120, 680, 420);
+    panelBox(W / 2 - 340, 100, 680, 460);
     ctx.textAlign = "center";
     ctx.font = "bold 54px sans-serif";
     ctx.fillStyle = "#f4fbff";
@@ -3963,7 +4108,7 @@
     ctx.font = "18px sans-serif";
     ctx.fillStyle = "rgba(210,230,240,0.9)";
     var lines = [
-      "三局两胜对决。带土擅长虚化与空间，橙发掌控黑棒与气盾。",
+      "三局两胜对决。带土擅长虚化与空间，佩恩天道掌控黑棒与气盾。",
       "开局可选单人人机、双人对战，或联机并肩打两名人机。",
       "移动：P1 WASD / P2 方向键（或摇杆），技能点按图标或快捷键。",
       "受击会产生僵直，伤害越高停顿越久。"
@@ -4004,10 +4149,17 @@
       playerSide = "L";
       goCharSelect();
     });
+    flowButton(W / 2 - 90, 360, 180, 56, "练习模式", true, function () {
+      gameMode = "practice";
+      playerSide = "L";
+      practicePanel = false;
+      goCharSelect();
+    });
     ctx.font = "13px sans-serif";
     ctx.fillStyle = "rgba(180,210,220,0.75)";
-    ctx.fillText("联机：P1 WASD + QERF… / P2 方向键 + UIO PJK… 并肩打两名随机人机", W / 2, 370);
-    flowButton(W / 2 - 90, 400, 180, 44, "返回介绍", false, function () { goIntro(); });
+    ctx.fillText("联机：P1 WASD + QERF… / P2 方向键 + UIO PJK… 并肩打两名随机人机", W / 2, 430);
+    ctx.fillText("练习：无计时，可单独开关技能冷却；对手可选呆立木桩或简易人机", W / 2, 452);
+    flowButton(W / 2 - 90, 470, 180, 44, "返回介绍", false, function () { goIntro(); });
   }
 
   function rosterById(id) {
@@ -4433,7 +4585,7 @@
         ctx.textAlign = "left";
         ctx.font = "bold 16px sans-serif";
         ctx.fillStyle = "#f4efe6";
-        ctx.fillText(left.name + (gameMode === "ai" && playerSide === "L" ? " · 你" : (gameMode === "ai" ? " · AI" : "")), 16, 18);
+        ctx.fillText(left.name + (((gameMode === "ai" || gameMode === "practice") && playerSide === "L") ? " · 你" : ((gameMode === "ai" || gameMode === "practice") ? " · AI" : "")), 16, 18);
         drawResourceBars(16, 26, 230, left, false);
         drawPortrait(278, 42, left);
         for (i = 0; i < leftOrder.length; i++) drawSkillOrb(30 + i * 56, 108, left, leftOrder[i]);
@@ -4442,7 +4594,7 @@
         ctx.textAlign = "right";
         ctx.font = "bold 16px sans-serif";
         ctx.fillStyle = "#f4efe6";
-        ctx.fillText((gameMode === "ai" && playerSide === "R" ? "你 · " : (gameMode === "ai" ? "AI · " : "")) + right.name, W - 16, 18);
+        ctx.fillText((((gameMode === "ai" || gameMode === "practice") && playerSide === "R") ? "你 · " : ((gameMode === "ai" || gameMode === "practice") ? "AI · " : "")) + right.name, W - 16, 18);
         drawResourceBars(W - 16, 26, 230, right, true);
         for (i = 0; i < rightOrder.length; i++) drawSkillOrb(W - 30 - (rightOrder.length - 1 - i) * 56, 108, right, rightOrder[i]);
       }
@@ -4471,21 +4623,32 @@
       ctx.fillText("显示界面", 70, H - 32);
       addHit(24, H - 52, 92, 30, function () { hudHidden = false; });
     }
+    if (gameMode === "practice") drawPracticePanel();
     if (matchState === "fight" || matchState === "countdown" || matchState === "roundEnd") drawSticks();
 
     if (matchState === "countdown") {
-      var n = Math.ceil(countLeft - 0.0001);
-      if (n < 1) n = 1;
       ctx.textAlign = "center";
-      ctx.font = "bold 28px sans-serif";
-      ctx.fillStyle = "#f4efe6";
-      ctx.fillText("第" + roundIndex + "回  " + roundWinsL + ":" + roundWinsR, W / 2, H / 2 - 70);
-      ctx.font = "bold 120px sans-serif";
-      ctx.fillStyle = "#f4fbff";
-      ctx.strokeStyle = "rgba(20,12,10,0.65)";
-      ctx.lineWidth = 8;
-      ctx.strokeText(String(n), W / 2, H / 2 + 24);
-      ctx.fillText(String(n), W / 2, H / 2 + 24);
+      if (countdownPhase === "round") {
+        ctx.font = "bold 72px sans-serif";
+        ctx.fillStyle = "#f4fbff";
+        ctx.strokeStyle = "rgba(20,12,10,0.65)";
+        ctx.lineWidth = 8;
+        var rb = roundBannerText();
+        ctx.strokeText(rb, W / 2, H / 2);
+        ctx.fillText(rb, W / 2, H / 2);
+        if (gameMode !== "practice") {
+          ctx.font = "bold 22px sans-serif";
+          ctx.fillStyle = "#f4efe6";
+          ctx.fillText(roundWinsL + " : " + roundWinsR, W / 2, H / 2 + 48);
+        }
+      } else {
+        ctx.font = "bold 64px sans-serif";
+        ctx.fillStyle = "#ffe7a0";
+        ctx.strokeStyle = "rgba(20,12,10,0.65)";
+        ctx.lineWidth = 8;
+        ctx.strokeText("开始战斗", W / 2, H / 2 + 10);
+        ctx.fillText("开始战斗", W / 2, H / 2 + 10);
+      }
     }
     if (matchState === "roundEnd") {
       var rw = matchResult === "L" ? left : (matchResult === "R" ? right : null);
@@ -4512,8 +4675,8 @@
       var winner = matchResult === "L" ? left : (matchResult === "R" ? right : null);
       var winTitle = null;
       if (!winner) winTitle = "平局";
-      else if (isCoop()) winTitle = (matchResult === "L" ? "联机队" : "人机队") + " 获胜";
-      else winTitle = winner.name + " 获胜";
+      else if (isCoop()) winTitle = (matchResult === "L" ? "联机队" : "人机队") + " 胜负已分";
+      else winTitle = winner.name + " 胜负已分";
       panelBox(W / 2 - 260, H / 2 - 140, 520, 280);
       ctx.textAlign = "center";
       ctx.font = "bold 48px sans-serif";
@@ -4607,9 +4770,14 @@
       time += step;
       countLeft -= step;
       if (countLeft <= 0) {
-        matchState = "fight";
-        matchTime = 60;
-        syncFlowHint();
+        if (countdownPhase === "round") {
+          countdownPhase = "fight";
+          countLeft = 0.95;
+        } else {
+          matchState = "fight";
+          matchTime = (gameMode === "practice") ? 99999 : 60;
+          syncFlowHint();
+        }
       }
     } else if (matchState === "roundEnd") {
       if (step > 0) {
@@ -4625,7 +4793,7 @@
         updateAI(step);
         update(step);
       }
-      if (matchState === "fight" && step > 0) {
+      if (matchState === "fight" && step > 0 && gameMode !== "practice") {
         matchTime -= step;
         if (matchTime <= 0) {
           matchTime = 0;
@@ -4931,12 +5099,19 @@
     return {
       matchState: matchState,
       gameMode: gameMode,
+      countdownPhase: countdownPhase,
+      countLeft: countLeft,
+      roundIndex: roundIndex,
+      roundBanner: roundBannerText(),
+      matchTime: matchTime,
+      practiceDummy: practiceDummy,
+      practiceNoCdAll: practiceNoCdAll,
       selectedL: selectedL,
       selectedR: selectedR,
       selectedScrollL: selectedScrollL,
       selectedScrollR: selectedScrollR,
       fighters: activeFighters().map(function (f) {
-        return { id: f.id, name: f.name, kit: f.kit, hp: f.hp, x: f.x, y: f.y, team: teamOf(f), airH: f.airH || 0, airborne: !!f.airborne, pullOn: !!f.pullOn, repulseOn: !!f.repulseOn, anim: f.anim };
+        return { id: f.id, name: f.name, kit: f.kit, hp: f.hp, hpChip: f.hpChip, x: f.x, y: f.y, team: teamOf(f), airH: f.airH || 0, airborne: !!f.airborne, pullOn: !!f.pullOn, repulseOn: !!f.repulseOn, anim: f.anim, knockPhase: f.knockPhase, knockT: f.knockT || 0, moveSpeed: f.moveSpeed };
       }),
       roundWinsL: roundWinsL,
       roundWinsR: roundWinsR,
@@ -4958,6 +5133,33 @@
     selectedScrollL = SCROLL_DEFS[0].id;
     selectedScrollR = SCROLL_DEFS[1].id;
     beginMatch();
+  };
+  window.__DUEL_FORCE_PRACTICE__ = function () {
+    gameMode = "practice";
+    selectedChar = "obito";
+    selectedScroll = SCROLL_DEFS[0].id;
+    practiceDummy = true;
+    practiceNoCdAll = false;
+    practiceNoCd = {};
+    beginMatch();
+  };
+  window.__DUEL_FORCE_FIGHT__ = function () {
+    gameMode = "ai";
+    selectedChar = "obito";
+    selectedScroll = SCROLL_DEFS[0].id;
+    beginMatch();
+  };
+  window.__DUEL_HURT__ = function (fid, amount) {
+    var f = activeFighters().filter(function (x) { return x.id === fid; })[0];
+    if (!f) return false;
+    f.invuln = 0; f.phase = 0; f.shield = 0; f.hyperArmor = 0;
+    return hurt(f, amount, "#ffe7a0");
+  };
+  window.__DUEL_LAUNCH__ = function (fid) {
+    var f = activeFighters().filter(function (x) { return x.id === fid; })[0];
+    if (!f) return false;
+    f.invuln = 0; f.phase = 0; f.shield = 0; f.hyperArmor = 0;
+    return hurt(f, 30, "#ffe7a0"); // 20 after 2/3 >= LAUNCH_DMG 12
   };
 
   reset();
