@@ -41,6 +41,28 @@
 
   var canvas = document.getElementById("arena");
   var ctx = canvas.getContext("2d");
+  // pages20: never silently draw nothing. Broken images get a red placeholder box;
+  // images still in flight are skipped (match start is gated on loading anyway).
+  (function guardDrawImage() {
+    var raw = ctx.drawImage;
+    ctx.drawImage = function (img) {
+      if (img && img.tagName === "IMG" && !(img.complete && img.naturalWidth > 0)) {
+        if (img._err || (img._started && img.complete)) {
+          var a = arguments, x, y, w, h;
+          if (a.length >= 9) { x = a[5]; y = a[6]; w = a[7]; h = a[8]; }
+          else if (a.length >= 5) { x = a[1]; y = a[2]; w = a[3]; h = a[4]; }
+          else { x = a[1]; y = a[2]; w = 60; h = 120; }
+          ctx.save();
+          ctx.strokeStyle = "#ff3030"; ctx.lineWidth = 2;
+          ctx.fillStyle = "rgba(255,40,40,0.25)";
+          ctx.fillRect(x, y, w, h); ctx.strokeRect(x, y, w, h);
+          ctx.restore();
+        }
+        return;
+      }
+      return raw.apply(ctx, arguments);
+    };
+  })();
   var W = 1280;
   var H = 720;
   var MIN_Y = 418;
@@ -75,13 +97,52 @@
   var selectedScrollL = null; // 2P left scroll
   var selectedScrollR = null; // 2P right scroll
   var charHover = -1;
+  // pages20: lazy asset registry. Core (menu/HUD/stage) loads at once; each kit's
+  // frames load only when a match that uses that kit starts (with a progress screen).
+  var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [] };
+  var assetErrors = [];
+  function regImg(img, src, group) {
+    if (!ASSET_GROUPS[group]) group = "core";
+    img._src = src;
+    img._started = false;
+    img.onerror = function () {
+      img._err = true;
+      assetErrors.push(src);
+      if (window.console) console.error("[asset missing] " + src);
+    };
+    ASSET_GROUPS[group].push(img);
+    if (group === "core") { img._started = true; img.src = src; }
+    return img;
+  }
+  function groupForPath(path) {
+    var head = String(path).split("/")[0];
+    return ASSET_GROUPS[head] && head !== "core" ? head : "core";
+  }
+  function ensureGroups(list) {
+    var i, j, g;
+    for (i = 0; i < list.length; i++) {
+      g = ASSET_GROUPS[list[i]] || [];
+      for (j = 0; j < g.length; j++) if (!g[j]._started) { g[j]._started = true; g[j].src = g[j]._src; }
+    }
+  }
+  function groupProgress(list) {
+    var i, j, g, tot = 0, done = 0, err = 0;
+    for (i = 0; i < list.length; i++) {
+      g = ASSET_GROUPS[list[i]] || [];
+      for (j = 0; j < g.length; j++) {
+        tot++;
+        if (g[j]._err) { done++; err++; }
+        else if (g[j]._started && g[j].complete && g[j].naturalWidth > 0) done++;
+      }
+    }
+    return { tot: tot, done: done, err: err };
+  }
   var cardImgs = {};
   (function loadCards() {
     var ids = ["obito", "pain", "tanjiro", "lockA", "lockB", "lockC"];
     var i;
     for (i = 0; i < ids.length; i++) {
-      var img = new Image();
-      img.src = "cards/" + ids[i] + ".png?v=" + "pages18";
+      var img = regImg(new Image(), "cards/" + ids[i] + ".png?v=" + "pages18", "core");
       cardImgs[ids[i]] = img;
     }
   })();
@@ -95,8 +156,7 @@
   (function loadScrolls() {
     var i;
     for (i = 0; i < SCROLL_DEFS.length; i++) {
-      var img = new Image();
-      img.src = SCROLL_DEFS[i].icon + "?v=" + "pages19";
+      var img = regImg(new Image(), SCROLL_DEFS[i].icon + "?v=" + "pages19", "core");
       scrollImgs[SCROLL_DEFS[i].id] = img;
     }
   })();
@@ -149,21 +209,20 @@
   var wheels = [];
   var swords = [];
   var voidSpace = false;
-  var arenaImg = new Image();
-  arenaImg.src = "arena-wide.png";
-  var sharinganImg = new Image();
-  sharinganImg.src = "sharingan.png";
+  var voidT = 0; // pages20: 切空间 lasts at most VOID_DUR seconds
+  var VOID_DUR = 4;
+  var arenaImg = regImg(new Image(), "arena-wide.png", "core");
+  var sharinganImg = regImg(new Image(), "sharingan.png", "core");
 
   // Bump when sprite PNGs change so browsers/CDN do not serve stale frames.
-  var ASSET_V = "pages19";
+  var ASSET_V = "pages20";
   function loadStrip(prefix, count, folder) {
     var arr = [];
     var i;
     if (!folder) folder = "obito";
     for (i = 1; i <= count; i++) {
-      var img = new Image();
       var n = i < 10 ? "0" + i : String(i);
-      img.src = folder + "/" + prefix + "_" + n + ".png?v=" + ASSET_V;
+      var img = regImg(new Image(), folder + "/" + prefix + "_" + n + ".png?v=" + ASSET_V, groupForPath(folder));
       arr.push(img);
     }
     return arr;
@@ -185,8 +244,7 @@
     var ids = ["obito", "pain", "tanjiro"];
     var i;
     for (i = 0; i < ids.length; i++) {
-      var img = new Image();
-      img.src = "portraits/" + ids[i] + ".png?v=" + ASSET_V;
+      var img = regImg(new Image(), "portraits/" + ids[i] + ".png?v=" + ASSET_V, "core");
       portraitImgs[ids[i]] = img;
     }
   })();
@@ -257,9 +315,8 @@
     var arr = [];
     var i;
     for (i = 1; i <= count; i++) {
-      var img = new Image();
       var n = i < 10 ? "0" + i : String(i);
-      img.src = folder + "/" + n + ".png?v=" + ASSET_V;
+      var img = regImg(new Image(), folder + "/" + n + ".png?v=" + ASSET_V, groupForPath(folder));
       arr.push(img);
     }
     return arr;
@@ -567,39 +624,37 @@
     f.ult2Hits = 0;
   }
 
-  function sideKeyLabels(side, orderLen) {
-    var keys = side === "L" ? ["Q", "E", "R", "F", "C", "V", "B"] : ["U", "I", "O", "P", "J", "K", "L"];
-    return keys.slice(0, orderLen);
+  // pages20: fixed slots on both sides. Non-scroll skills fill slots 0..5 in order;
+  // the 密卷 always sits on slot 6 (left B / right L) for every kit.
+  var SLOT_LABELS = { L: ["Q", "E", "R", "F", "C", "V", "B"], R: ["U", "I", "O", "P", "J", "K", "L"] };
+  function slotIndexFor(order, i) {
+    if (String(order[i]).indexOf("scroll_") === 0) return 6;
+    var n = 0, j;
+    for (j = 0; j < i; j++) if (String(order[j]).indexOf("scroll_") !== 0) n++;
+    return n;
+  }
+  function labelSide(f, order, side) {
+    var i;
+    for (i = 0; i < order.length; i++) {
+      if (f.skills[order[i]]) f.skills[order[i]].key = SLOT_LABELS[side][slotIndexFor(order, i)];
+    }
   }
 
   function rebuildControlMap() {
     var leftKeys = ["q", "e", "r", "f", "c", "v", "b"];
     var rightKeys = ["u", "i", "o", "p", "j", "k", "l"];
     var map = {};
-    var i, labels;
+    var i;
     var p2 = isCoop() ? left2 : right;
     var p2Order = isCoop() ? left2Order : rightOrder;
     var p2Id = isCoop() ? "L2" : "R";
-    labels = sideKeyLabels("L", leftOrder.length);
-    for (i = 0; i < leftOrder.length; i++) {
-      map[leftKeys[i]] = ["L", leftOrder[i]];
-      if (left.skills[leftOrder[i]]) left.skills[leftOrder[i]].key = labels[i];
-    }
-    labels = sideKeyLabels("R", p2Order.length);
-    for (i = 0; i < p2Order.length; i++) {
-      map[rightKeys[i]] = [p2Id, p2Order[i]];
-      if (p2.skills[p2Order[i]]) p2.skills[p2Order[i]].key = labels[i];
-    }
+    for (i = 0; i < leftOrder.length; i++) map[leftKeys[slotIndexFor(leftOrder, i)]] = ["L", leftOrder[i]];
+    labelSide(left, leftOrder, "L");
+    for (i = 0; i < p2Order.length; i++) map[rightKeys[slotIndexFor(p2Order, i)]] = [p2Id, p2Order[i]];
+    labelSide(p2, p2Order, "R");
     if (isCoop()) {
-      // Keep AI skill key labels for HUD (not bound to keys)
-      labels = sideKeyLabels("R", rightOrder.length);
-      for (i = 0; i < rightOrder.length; i++) {
-        if (right.skills[rightOrder[i]]) right.skills[rightOrder[i]].key = labels[i];
-      }
-      labels = sideKeyLabels("R", right2Order.length);
-      for (i = 0; i < right2Order.length; i++) {
-        if (right2.skills[right2Order[i]]) right2.skills[right2Order[i]].key = labels[i];
-      }
+      labelSide(right, rightOrder, "R");
+      labelSide(right2, right2Order, "R");
     }
     controlMap = map;
   }
@@ -639,7 +694,7 @@
     applySideKit(right, kitR || "pain");
     leftOrder = KIT_DEFS[left.kit].order.slice();
     rightOrder = KIT_DEFS[right.kit].order.slice();
-    leftOrder = attachScrollSkill(left, leftOrder, scrollL, "V");
+    leftOrder = attachScrollSkill(left, leftOrder, scrollL, "B");
     rightOrder = attachScrollSkill(right, rightOrder, scrollR, "L");
     rebuildControlMap();
   }
@@ -653,7 +708,7 @@
     left2Order = KIT_DEFS[left2.kit].order.slice();
     rightOrder = KIT_DEFS[right.kit].order.slice();
     right2Order = KIT_DEFS[right2.kit].order.slice();
-    leftOrder = attachScrollSkill(left, leftOrder, scrollP1, "V");
+    leftOrder = attachScrollSkill(left, leftOrder, scrollP1, "B");
     left2Order = attachScrollSkill(left2, left2Order, scrollP2, "L");
     rightOrder = attachScrollSkill(right, rightOrder, scrollA1, "L");
     right2Order = attachScrollSkill(right2, right2Order, scrollA2, "L");
@@ -1207,6 +1262,7 @@
       var ui;
       for (ui = 0; ui < unlocked.length; ui++) if (unlocked[ui] !== humanKit) aiPool.push(unlocked[ui]);
       var aiKit = aiPool.length ? aiPool[Math.floor(Math.random() * aiPool.length)] : "pain";
+      if (window.__DUEL_AIKIT__ && window.__DUEL_AIKIT__ !== humanKit) aiKit = window.__DUEL_AIKIT__;
       var humanScroll = selectedScroll || SCROLL_DEFS[0].id;
       var aiScroll = pickAiScroll(humanScroll);
       if (humanKit === "pain") {
@@ -1217,7 +1273,45 @@
         applyMatchKits(humanKit, aiKit, humanScroll, aiScroll);
       }
     }
-    beginCountdown();
+    startAfterLoad();
+  }
+
+  var loadKits = [];
+  var loadT = 0;
+  function startAfterLoad() {
+    var fs = activeFighters();
+    var i;
+    loadKits = [];
+    for (i = 0; i < fs.length; i++) if (fs[i].kit && loadKits.indexOf(fs[i].kit) < 0) loadKits.push(fs[i].kit);
+    ensureGroups(loadKits);
+    loadT = 0;
+    var pr = groupProgress(loadKits.concat(["core"]));
+    if (pr.done >= pr.tot) { beginCountdown(); return; }
+    matchState = "loading";
+    syncFlowHint();
+  }
+  function drawLoading() {
+    var pr = groupProgress(loadKits.concat(["core"]));
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = "#0c0d14";
+    ctx.fillRect(0, 0, W, H);
+    var bw = Math.min(420, W * 0.6), bx = (W - bw) / 2, by = H / 2;
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 22px sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText("加载角色素材…", W / 2, by - 24);
+    ctx.fillStyle = "#333";
+    ctx.fillRect(bx, by, bw, 14);
+    ctx.fillStyle = "#f0a030";
+    ctx.fillRect(bx, by, bw * (pr.tot ? pr.done / pr.tot : 1), 14);
+    ctx.fillStyle = "#ccc";
+    ctx.font = "14px sans-serif";
+    ctx.fillText(pr.done + " / " + pr.tot, W / 2, by + 36);
+    if (pr.err) {
+      ctx.fillStyle = "#ff6060";
+      ctx.fillText("有 " + pr.err + " 张素材加载失败（将以红框占位）：" + String(assetErrors[0] || ""), W / 2, by + 60);
+    }
   }
 
   function beginCountdown() {
@@ -1705,6 +1799,8 @@
     });
     f.invuln = (voidSpace && isObito(f)) ? 0.4 : 0.25;
     var spot = clampSpot(f.x + dir * 1050, f.y);
+    // pages20: keep the blink landing inside the visible play area (clear of the on-screen sticks).
+    spot.x = clamp(spot.x, 175, W - 175);
     f.x = spot.x;
     f.y = spot.y;
     var opp = other(f);
@@ -1876,6 +1972,7 @@
 
   function castSpace(f) {
     voidSpace = !voidSpace;
+    voidT = voidSpace ? VOID_DUR : 0;
     f.anim = "cast";
     f.animT = 0;
     f.animDur = 0.2;
@@ -2087,6 +2184,12 @@
     }
     if (ix < 0) f.facing = -1;
     else if (ix > 0) f.facing = 1;
+    else {
+      // pages20: with no horizontal input, turn back toward the nearest foe
+      // (e.g. after Q's lunge carries Obito past the opponent).
+      var foeF = nearestEnemy(f);
+      if (foeF && foeF !== f && Math.abs(foeF.x - f.x) > 6) f.facing = foeF.x > f.x ? 1 : -1;
+    }
     if (ix === 0 && iy === 0) {
       f.gait = "idle";
       return;
@@ -2235,6 +2338,16 @@
   }
 
   function update(dt) {
+    if (voidSpace) {
+      voidT -= dt;
+      if (voidT <= 0) {
+        voidSpace = false;
+        voidT = 0;
+        var oKitV = fighterByKit("obito");
+        if (oKitV && oKitV.phase > 3) oKitV.phase = 3;
+        if (oKitV) spawnFloater(oKitV.x, oKitV.y - 160, "返回", oKitV.palette.glow);
+      }
+    }
     time += dt;
     if (shake > 0) shake = Math.max(0, shake - dt * 18);
 
@@ -4557,19 +4670,21 @@
 
   function drawPracticePanel() {
     if (gameMode !== "practice" || matchState !== "fight") return;
-    var bx = W / 2 - 210;
-    var by = H - 168;
-    // toggle button
+    var pw = 600, ph = 160;
+    var bx = W / 2 - pw / 2;
+    var by = H - 64 - ph;
     flowButton(W / 2 - 70, H - 52, 140, 34, practicePanel ? "关闭设置" : "练习设置", true, function () {
       practicePanel = !practicePanel;
     });
     if (!practicePanel) return;
-    panelBox(bx, by - 10, 420, 118);
+    panelBox(bx, by, pw, ph);
     ctx.textAlign = "left";
-    ctx.font = "bold 14px sans-serif";
+    ctx.textBaseline = "middle";
+    ctx.font = "bold 15px sans-serif";
     ctx.fillStyle = "#f4efe6";
-    ctx.fillText("技能冷却", bx + 16, by + 18);
-    flowButton(bx + 100, by + 2, 90, 26, practiceNoCdAll ? "全无CD" : "全有CD", true, function () {
+    ctx.fillText("技能冷却", bx + 16, by + 26);
+    ctx.textBaseline = "alphabetic";
+    flowButton(bx + 96, by + 12, 104, 28, practiceNoCdAll ? "全部无CD" : "全部有CD", true, function () {
       practiceNoCdAll = !practiceNoCdAll;
       if (practiceNoCdAll) {
         var f0 = humanFighter();
@@ -4579,20 +4694,30 @@
         practiceNoCd = {};
       }
     });
-    flowButton(bx + 200, by + 2, 100, 26, practiceDummy ? "木桩呆立" : "人机进攻", false, function () {
+    flowButton(bx + 208, by + 12, 104, 28, practiceDummy ? "木桩呆立" : "人机进攻", false, function () {
       practiceDummy = !practiceDummy;
+    });
+    flowButton(bx + pw - 220, by + 12, 100, 28, "重选角色", false, function () {
+      practicePanel = false;
+      goCharSelect();
+    });
+    flowButton(bx + pw - 112, by + 12, 96, 28, "返回菜单", false, function () {
+      practicePanel = false;
+      goMode();
     });
     var f = humanFighter();
     var order = (f.id === "L" || f.id === "L2") ? leftOrder : rightOrder;
-    var i;
+    var i, n = 0;
+    var cols = 4, cw = 138, ch = 30, gx = 6;
     for (i = 0; i < order.length; i++) {
       var sid = order[i];
       var sk = f.skills[sid];
       if (!sk) continue;
       var on = practiceNoCdAll || practiceNoCd[sid];
-      var x = bx + 14 + (i % 5) * 80;
-      var y = by + 40 + Math.floor(i / 5) * 36;
-      flowButton(x, y, 74, 28, sk.name + (on ? "·无" : "·有"), on, (function (id) {
+      var x = bx + 16 + (n % cols) * (cw + gx);
+      var y = by + 56 + Math.floor(n / cols) * (ch + 8);
+      n++;
+      flowButton(x, y, cw, ch, sk.key + " " + sk.name + (on ? " 无CD" : " 有CD"), on, (function (id) {
         return function () {
           practiceNoCdAll = false;
           practiceNoCd[id] = !practiceNoCd[id];
@@ -4627,10 +4752,18 @@
     ctx.strokeStyle = primary ? "rgba(180,255,245,0.85)" : "rgba(160,180,200,0.35)";
     ctx.lineWidth = 2;
     ctx.stroke();
-    ctx.font = "bold 22px sans-serif";
+    // Shrink the label until it fits inside the button (never overflow).
+    var fpx = Math.min(22, Math.round(h * 0.62));
+    ctx.font = "bold " + fpx + "px sans-serif";
+    while (fpx > 9 && ctx.measureText(label).width > w - 12) {
+      fpx -= 1;
+      ctx.font = "bold " + fpx + "px sans-serif";
+    }
     ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
     ctx.fillStyle = primary ? "#041018" : "#eef6ff";
-    ctx.fillText(label, x + w / 2, y + h / 2 + 8);
+    ctx.fillText(label, x + w / 2, y + h / 2 + 1);
+    ctx.textBaseline = "alphabetic";
     ctx.restore();
     addHit(x, y, w, h, fn);
   }
@@ -4871,13 +5004,13 @@
     ctx.textAlign = "center";
     ctx.font = "bold 16px sans-serif";
     ctx.fillStyle = "#f4fbff";
-    ctx.fillText("密卷", W / 2, y - 18);
+    ctx.fillText("密卷", W / 2, y - 34);
     ctx.font = "12px sans-serif";
     ctx.fillStyle = "rgba(200,220,230,0.75)";
     if (mode === "vs") {
-      ctx.fillText("密卷：霸体 / 回蓝 / 清CD / 驱散 · 先赋左再赋右", W / 2, y - 2);
+      ctx.fillText("密卷：霸体 / 回蓝 / 清CD / 驱散 · 先赋左再赋右", W / 2, y - 16);
     } else {
-      ctx.fillText("密卷：霸体4秒 · 回蓝锁满10秒 · 清CD · 驱散(僵直+破霸体)", W / 2, y - 2);
+      ctx.fillText("密卷：霸体4秒 · 回蓝锁满10秒 · 清CD · 驱散(僵直+破霸体)", W / 2, y - 16);
     }
     for (i = 0; i < n; i++) {
       var def = SCROLL_DEFS[i];
@@ -5003,7 +5136,7 @@
       }
     }
 
-    drawScrollPicker(460, "vs");
+    drawScrollPicker(500, "vs");
 
     var can = vsCanConfirm() && vsScrollReady();
     ctx.font = "13px sans-serif";
@@ -5031,10 +5164,10 @@
     ctx.fillText("先点角色卡，再点底部密卷，然后开始。对手自动是另一位解锁角色。", W / 2, 92);
 
     var cols = 3;
-    var cardW = 150;
-    var cardH = 200;
+    var cardW = 136;
+    var cardH = 176;
     var gapX = 18;
-    var gapY = 12;
+    var gapY = 10;
     var gridW = cols * cardW + (cols - 1) * gapX;
     var startX = (W - gridW) / 2;
     var startY = 108;
@@ -5054,7 +5187,7 @@
       }
     }
 
-    drawScrollPicker(520, "solo");
+    drawScrollPicker(540, "solo");
 
     var can = !!(selectedChar && selectedScroll);
     ctx.font = "13px sans-serif";
@@ -5243,6 +5376,7 @@
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, W, H);
     ctx.setTransform(1, 0, 0, 1, ox, oy);
+    if (matchState === "loading") { drawLoading(); return; }
     if (matchState === "intro" || matchState === "mode" || matchState === "charSelect") {
       // Flow screens paint their own stage + UI inside drawHud.
       ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -5296,6 +5430,14 @@
         step = phaseSlow * 0.5 + rest;
         phaseSlow = 0;
       }
+    }
+    if (matchState === "loading") {
+      loadT += dt;
+      var lp = groupProgress(loadKits.concat(["core"]));
+      if (lp.done >= lp.tot || loadT > 60) beginCountdown();
+      render();
+      requestAnimationFrame(frame);
+      return;
     }
     if (matchState === "countdown") {
       if (step <= 0) {
@@ -5652,8 +5794,34 @@
       roundWinsL: roundWinsL,
       roundWinsR: roundWinsR,
       koId: koId,
+      voidSpace: voidSpace,
+      voidT: voidT,
+      practicePanel: practicePanel,
+      leftKeys: leftOrder.map(function (id) { return left.skills[id] ? left.skills[id].key + ":" + id : "?"; }),
+      rightKeys: rightOrder.map(function (id) { return right.skills[id] ? right.skills[id].key + ":" + id : "?"; }),
+      facing: activeFighters().map(function (f) { return f.facing; }),
+      phase: activeFighters().map(function (f) { return f.phase || 0; }),
+      cds: activeFighters().map(function (f) { var o = {}, k; for (k in f.skills) o[k] = +(f.skills[k].cd || 0).toFixed(2); return o; }),
+      assets: { core: groupProgress(["core"]), obito: groupProgress(["obito"]), pain: groupProgress(["pain"]), tanjiro: groupProgress(["tanjiro"]), errors: assetErrors.slice(0, 5) },
       assetV: ASSET_V
     };
+  };
+  window.__DUEL_GOTO_SELECT__ = function (mode) {
+    gameMode = mode || "ai";
+    matchState = "charSelect";
+    syncFlowHint();
+    return true;
+  };
+  window.__DUEL_START__ = function (mode, me, ai) {
+    gameMode = mode || "ai";
+    selectedChar = me || "obito";
+    selectedScroll = SCROLL_DEFS[0].id;
+    window.__DUEL_AIKIT__ = ai || null;
+    practiceDummy = true;
+    practiceNoCdAll = false;
+    practiceNoCd = {};
+    beginMatch();
+    return matchState;
   };
   window.__DUEL_TEST_PULL__ = function (fid, lift) {
     var f = activeFighters().filter(function (x) { return x.id === fid; })[0];
@@ -5688,6 +5856,7 @@
     practiceNoCdAll = !!opts.noCd;
     practiceNoCd = {};
     beginMatch();
+    if (matchState === "loading") return window.__DUEL_DEBUG__();
     // Skip countdown into fight
     matchState = "fight";
     countdownPhase = "fight";
