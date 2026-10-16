@@ -47,7 +47,7 @@
     var raw = ctx.drawImage;
     ctx.drawImage = function (img) {
       if (img && img.tagName === "IMG" && !(img.complete && img.naturalWidth > 0)) {
-        if (img._err || (img._started && img.complete)) {
+        if (img._err) {
           var a = arguments, x, y, w, h;
           if (a.length >= 9) { x = a[5]; y = a[6]; w = a[7]; h = a[8]; }
           else if (a.length >= 5) { x = a[1]; y = a[2]; w = a[3]; h = a[4]; }
@@ -97,33 +97,109 @@
   var selectedScrollL = null; // 2P left scroll
   var selectedScrollR = null; // 2P right scroll
   var charHover = -1;
-  // pages20: lazy asset registry. Core (menu/HUD/stage) loads at once; each kit's
-  // frames load only when a match that uses that kit starts (with a progress screen).
+  // pages21: single cache key for every asset (cards, icons, frames, stage).
+  var ASSET_V = "pages21";
+  // pages21 asset loader: every image goes through one queue with a concurrency cap.
+  // Timeouts are not failures (the request is cancelled and re-queued); network
+  // errors retry with backoff; only after MAX_TRIES real errors is an image marked failed.
+  // All sprites are served as .webp (alpha kept).
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [] };
   var assetErrors = [];
+  var LOAD_CONCURRENCY = 8;
+  var LOAD_TIMEOUT_MS = 20000;
+  var MAX_TRIES = 5;
+  var loadQueue = [];
+  var loadActive = 0;
+  function assetUrl(src) {
+    var base = String(src).split("?")[0].replace(/\.png$/i, ".webp");
+    return base + "?v=" + ASSET_V;
+  }
+  function pumpLoads() {
+    while (loadActive < LOAD_CONCURRENCY && loadQueue.length) {
+      var img = loadQueue.shift();
+      if (img._ok || img._err || img._inflight) continue;
+      startLoad(img);
+    }
+  }
+  function startLoad(img) {
+    img._inflight = true;
+    loadActive++;
+    var attempt = (img._tries || 0) + (img._timeouts || 0);
+    var finished = false;
+    function finish() {
+      if (finished) return false;
+      finished = true;
+      clearTimeout(timer);
+      img._inflight = false;
+      loadActive--;
+      return true;
+    }
+    var timer = setTimeout(function () {
+      if (!finish()) return;
+      img._timeouts = (img._timeouts || 0) + 1; // timeout != failure
+      img.onload = img.onerror = null;
+      img.removeAttribute("src");
+      loadQueue.push(img);
+      pumpLoads();
+    }, LOAD_TIMEOUT_MS);
+    img.onload = function () {
+      if (!finish()) return;
+      img._ok = true;
+      pumpLoads();
+    };
+    img.onerror = function () {
+      if (!finish()) return;
+      img._tries = (img._tries || 0) + 1;
+      if (img._tries >= MAX_TRIES) {
+        img._err = true;
+        assetErrors.push(img._src);
+        if (window.console) console.error("[asset failed after retries] " + img._src);
+        pumpLoads();
+        return;
+      }
+      setTimeout(function () { loadQueue.unshift(img); pumpLoads(); }, 600 * img._tries);
+      pumpLoads();
+    };
+    img.src = img._src + (attempt ? "&r=" + attempt : "");
+  }
   function regImg(img, src, group) {
     if (!ASSET_GROUPS[group]) group = "core";
-    img._src = src;
+    img._src = assetUrl(src);
     img._started = false;
-    img.onerror = function () {
-      img._err = true;
-      assetErrors.push(src);
-      if (window.console) console.error("[asset missing] " + src);
-    };
     ASSET_GROUPS[group].push(img);
-    if (group === "core") { img._started = true; img.src = src; }
+    if (group === "core") { img._started = true; loadQueue.push(img); setTimeout(pumpLoads, 0); }
     return img;
   }
   function groupForPath(path) {
     var head = String(path).split("/")[0];
     return ASSET_GROUPS[head] && head !== "core" ? head : "core";
   }
-  function ensureGroups(list) {
+  // Queue groups; urgent ones jump ahead of background prefetch.
+  function ensureGroups(list, urgent) {
+    var i, j, g, add = [];
+    for (i = 0; i < list.length; i++) {
+      g = ASSET_GROUPS[list[i]] || [];
+      for (j = 0; j < g.length; j++) {
+        if (g[j]._ok || g[j]._err) continue;
+        g[j]._started = true;
+        add.push(g[j]);
+      }
+    }
+    if (urgent) {
+      loadQueue = add.concat(loadQueue.filter(function (x) { return add.indexOf(x) < 0; }));
+    } else {
+      for (i = 0; i < add.length; i++) if (loadQueue.indexOf(add[i]) < 0 && !add[i]._inflight) loadQueue.push(add[i]);
+    }
+    pumpLoads();
+  }
+  function retryFailed(list) {
     var i, j, g;
     for (i = 0; i < list.length; i++) {
       g = ASSET_GROUPS[list[i]] || [];
-      for (j = 0; j < g.length; j++) if (!g[j]._started) { g[j]._started = true; g[j].src = g[j]._src; }
+      for (j = 0; j < g.length; j++) if (g[j]._err) { g[j]._err = false; g[j]._tries = 0; }
     }
+    assetErrors = [];
+    ensureGroups(list, true);
   }
   function groupProgress(list) {
     var i, j, g, tot = 0, done = 0, err = 0;
@@ -131,18 +207,29 @@
       g = ASSET_GROUPS[list[i]] || [];
       for (j = 0; j < g.length; j++) {
         tot++;
-        if (g[j]._err) { done++; err++; }
-        else if (g[j]._started && g[j].complete && g[j].naturalWidth > 0) done++;
+        if (g[j]._err) err++;
+        else if (g[j]._ok) done++;
       }
     }
     return { tot: tot, done: done, err: err };
   }
+  // Once the menu art is in, quietly prefetch every kit so a match usually starts instantly.
+  (function prefetchKits() {
+    var tries = 0;
+    var t = setInterval(function () {
+      var c = groupProgress(["core"]);
+      if (c.done + c.err >= c.tot || ++tries > 120) {
+        clearInterval(t);
+        ensureGroups(["obito", "pain", "tanjiro"], false);
+      }
+    }, 250);
+  })();
   var cardImgs = {};
   (function loadCards() {
     var ids = ["obito", "pain", "tanjiro", "lockA", "lockB", "lockC"];
     var i;
     for (i = 0; i < ids.length; i++) {
-      var img = regImg(new Image(), "cards/" + ids[i] + ".png?v=" + "pages18", "core");
+      var img = regImg(new Image(), "cards/" + ids[i] + ".png", "core");
       cardImgs[ids[i]] = img;
     }
   })();
@@ -156,7 +243,7 @@
   (function loadScrolls() {
     var i;
     for (i = 0; i < SCROLL_DEFS.length; i++) {
-      var img = regImg(new Image(), SCROLL_DEFS[i].icon + "?v=" + "pages19", "core");
+      var img = regImg(new Image(), SCROLL_DEFS[i].icon, "core");
       scrollImgs[SCROLL_DEFS[i].id] = img;
     }
   })();
@@ -215,7 +302,6 @@
   var sharinganImg = regImg(new Image(), "sharingan.png", "core");
 
   // Bump when sprite PNGs change so browsers/CDN do not serve stale frames.
-  var ASSET_V = "pages20";
   function loadStrip(prefix, count, folder) {
     var arr = [];
     var i;
@@ -1030,6 +1116,7 @@
     target.flash = 0;
     target.hurt = 0.14;
     target.hpChip = Math.min(target.maxHp, Math.max(target.hpChip != null ? target.hpChip : target.maxHp, target.hp + amount));
+    target.chipHold = 0.5;
     target.barDmg = amount;
     target.barDmgT = 0.85;
     shake = Math.min(14, shake + 4.5 + Math.min(4, amount * 0.12));
@@ -1091,7 +1178,14 @@
         var leanAdd = (10 + amount * 0.65) * Math.PI / 180;
         var leanCap = 18 * Math.PI / 180;
         target.hitLean = Math.min(leanCap, Math.max(target.hitLean || 0, leanAdd) + leanAdd * 0.35);
-        target.hitPushVx = hitDir * (48 + amount * 5.5);
+        // pages21: knockback tiers. Slide distance ≈ v0 / 9 px.
+        // light ≈ 25px · mid (≥6 dmg) ≈ 60px · heavy (Pain K 重脚 / opts.heavy) ≈ 125px.
+        var atkT = opts.attacker || atk;
+        var tierV = 225;
+        if (opts.heavy || (atkT && atkT.anim === "kick")) tierV = 1125;
+        else if (amount >= 6) tierV = 540;
+        target.hitPushVx = hitDir * tierV;
+        target.hitTier = tierV;
         target.hitPushVy = (Math.random() * 2 - 1) * 8;
         target.hitShake = 0.16;
         target.hitLight = true;
@@ -1283,7 +1377,7 @@
     var i;
     loadKits = [];
     for (i = 0; i < fs.length; i++) if (fs[i].kit && loadKits.indexOf(fs[i].kit) < 0) loadKits.push(fs[i].kit);
-    ensureGroups(loadKits);
+    ensureGroups(loadKits.concat(["core"]), true);
     loadT = 0;
     var pr = groupProgress(loadKits.concat(["core"]));
     if (pr.done >= pr.tot) { beginCountdown(); return; }
@@ -1291,6 +1385,7 @@
     syncFlowHint();
   }
   function drawLoading() {
+    hudHits = [];
     var pr = groupProgress(loadKits.concat(["core"]));
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = "#0c0d14";
@@ -1310,7 +1405,14 @@
     ctx.fillText(pr.done + " / " + pr.tot, W / 2, by + 36);
     if (pr.err) {
       ctx.fillStyle = "#ff6060";
-      ctx.fillText("有 " + pr.err + " 张素材加载失败（将以红框占位）：" + String(assetErrors[0] || ""), W / 2, by + 60);
+      ctx.fillText("有 " + pr.err + " 张素材多次重试仍失败：" + String(assetErrors[0] || "").split("?")[0], W / 2, by + 60);
+      if (pr.done + pr.err >= pr.tot) {
+        flowButton(W / 2 - 170, by + 80, 160, 40, "重试", true, function () { retryFailed(loadKits.concat(["core"])); });
+        flowButton(W / 2 + 10, by + 80, 160, 40, "返回菜单", false, function () { goMode(); });
+      }
+    } else {
+      ctx.fillStyle = "rgba(200,210,220,0.6)";
+      ctx.fillText("素材加载齐全后自动开始", W / 2, by + 60);
     }
   }
 
@@ -2482,8 +2584,10 @@
       if (f.hitShake > 0) f.hitShake = Math.max(0, f.hitShake - dt);
       if (f.barDmgT > 0) f.barDmgT = Math.max(0, f.barDmgT - dt);
       if (f.hpChip == null) f.hpChip = f.hp;
+      if (f.chipHold > 0) f.chipHold = Math.max(0, f.chipHold - dt);
       if (f.hpChip > f.hp) {
-        f.hpChip = Math.max(f.hp, f.hpChip - f.maxHp * 0.55 * dt);
+        // pages21: white chip holds briefly, then drains slowly so it reads as white.
+        if (!(f.chipHold > 0)) f.hpChip = Math.max(f.hp, f.hpChip - f.maxHp * 0.3 * dt);
       } else {
         f.hpChip = f.hp;
       }
@@ -4443,7 +4547,7 @@
     var cwChip = Math.max(0, w * chipRatio);
     var hw = Math.max(0, w * ratio);
     if (cwChip > hw + 0.5) {
-      ctx.fillStyle = "rgba(255,255,255,0.88)";
+      ctx.fillStyle = "#ffffff";
       if (fromRight) roundRect(hx + w - cwChip, y, cwChip, hh, 4);
       else roundRect(hx, y, cwChip, hh, 4);
       ctx.fill();
@@ -4468,8 +4572,12 @@
       ctx.fillStyle = "#fff6e0";
       ctx.strokeStyle = "rgba(40,10,10,0.75)";
       ctx.lineWidth = 3;
-      ctx.textAlign = fromRight ? "left" : "right";
-      var tx = fromRight ? hx + w + 8 : hx - 8;
+      // pages21: number sits just past the white chip, inside the bar area (never off-screen).
+      // Inside the bar, right at the red/white boundary, on the red side.
+      var inner = hw > 34;
+      ctx.textAlign = fromRight ? (inner ? "left" : "right") : (inner ? "right" : "left");
+      var edge = fromRight ? hx + w - hw : hx + hw;
+      var tx = fromRight ? (inner ? edge + 4 : edge - 4) : (inner ? edge - 4 : edge + 4);
       var ty = y + 13;
       ctx.strokeText("-" + f.barDmg, tx, ty);
       ctx.fillText("-" + f.barDmg, tx, ty);
@@ -5434,7 +5542,8 @@
     if (matchState === "loading") {
       loadT += dt;
       var lp = groupProgress(loadKits.concat(["core"]));
-      if (lp.done >= lp.tot || loadT > 60) beginCountdown();
+      // Never enter the fight until every needed image is actually decoded.
+      if (lp.done >= lp.tot) beginCountdown();
       render();
       requestAnimationFrame(frame);
       return;
@@ -5757,7 +5866,7 @@
   // Canvas UI handles intro / mode / charSelect / rematch hits via hudHits (mousedown + pointerdown).
 
   canvas.addEventListener("pointerdown", function (e) {
-    if (matchState !== "intro" && matchState !== "mode" && matchState !== "charSelect" && matchState !== "result") return;
+    if (matchState !== "intro" && matchState !== "mode" && matchState !== "charSelect" && matchState !== "result" && matchState !== "loading") return;
     var pt = canvasPoint(e);
     if (!pt) return;
     var hi;
@@ -5795,6 +5904,8 @@
       roundWinsR: roundWinsR,
       koId: koId,
       voidSpace: voidSpace,
+      selectedChar: selectedChar,
+      selectedScroll: selectedScroll,
       voidT: voidT,
       practicePanel: practicePanel,
       leftKeys: leftOrder.map(function (id) { return left.skills[id] ? left.skills[id].key + ":" + id : "?"; }),
@@ -5810,6 +5921,18 @@
     gameMode = mode || "ai";
     matchState = "charSelect";
     syncFlowHint();
+    return true;
+  };
+  window.__DUEL_ASSET_LIST__ = function () {
+    var out = [], g, j;
+    for (g in ASSET_GROUPS) for (j = 0; j < ASSET_GROUPS[g].length; j++) out.push([g, ASSET_GROUPS[g][j]._src]);
+    return out;
+  };
+  window.__DUEL_PLACE__ = function (lx, rx) {
+    left.x = lx; right.x = rx; left.y = right.y = 530;
+    left.facing = 1; right.facing = -1;
+    left.hitPushVx = right.hitPushVx = 0;
+    left.stun = right.stun = 0; left.invuln = right.invuln = 0;
     return true;
   };
   window.__DUEL_START__ = function (mode, me, ai) {
