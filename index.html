@@ -43,15 +43,21 @@
   var ctx = canvas.getContext("2d");
   // pages20: never silently draw nothing. Broken images get a red placeholder box;
   // images still in flight are skipped (match start is gated on loading anyway).
+    // pages22: route atlas frames through drawFrame; broken images get a red box.
   (function guardDrawImage() {
     var raw = ctx.drawImage;
     ctx.drawImage = function (img) {
+      if (img && img.sheetPath) {
+        var a = arguments;
+        if (a.length >= 5) drawFrame(img, a[1], a[2], a[3], a[4]);
+        return;
+      }
       if (img && img.tagName === "IMG" && !(img.complete && img.naturalWidth > 0)) {
         if (img._err) {
-          var a = arguments, x, y, w, h;
-          if (a.length >= 9) { x = a[5]; y = a[6]; w = a[7]; h = a[8]; }
-          else if (a.length >= 5) { x = a[1]; y = a[2]; w = a[3]; h = a[4]; }
-          else { x = a[1]; y = a[2]; w = 60; h = 120; }
+          var a2 = arguments, x, y, w, h;
+          if (a2.length >= 9) { x = a2[5]; y = a2[6]; w = a2[7]; h = a2[8]; }
+          else if (a2.length >= 5) { x = a2[1]; y = a2[2]; w = a2[3]; h = a2[4]; }
+          else { x = a2[1]; y = a2[2]; w = 60; h = 120; }
           ctx.save();
           ctx.strokeStyle = "#ff3030"; ctx.lineWidth = 2;
           ctx.fillStyle = "rgba(255,40,40,0.25)";
@@ -97,35 +103,105 @@
   var selectedScrollL = null; // 2P left scroll
   var selectedScrollR = null; // 2P right scroll
   var charHover = -1;
-  // pages21: single cache key for every asset (cards, icons, frames, stage).
-  var ASSET_V = "pages21";
-  // pages21 asset loader: every image goes through one queue with a concurrency cap.
-  // Timeouts are not failures (the request is cancelled and re-queued); network
-  // errors retry with backoff; only after MAX_TRIES real errors is an image marked failed.
-  // All sprites are served as .webp (alpha kept).
+  // pages22: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
+  // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
+  var ASSET_V = "pages22";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [] };
   var assetErrors = [];
-  var LOAD_CONCURRENCY = 8;
-  var LOAD_TIMEOUT_MS = 20000;
-  var MAX_TRIES = 5;
+  var LOAD_CONCURRENCY = 4;
+  var MAX_TRIES = 4;
   var loadQueue = [];
   var loadActive = 0;
+  var loadMode = "idle"; // idle | match | prefetch
+  var matchLoadStartedAt = 0;
+  var matchStall = false;
+  var sheetManifest = null;
+  var sheetImgs = {};
+  var frameCache = {};
+  var coreReady = false;
+
   function assetUrl(src) {
-    var base = String(src).split("?")[0].replace(/\.png$/i, ".webp");
+    var base = String(src).split("?")[0];
+    if (!/\.webp$/i.test(base) && !/\.json$/i.test(base)) base = base.replace(/\.png$/i, ".webp");
     return base + "?v=" + ASSET_V;
   }
+
+  function Frame(sheetPath, sx, sy, sw, sh) {
+    this.sheetPath = sheetPath;
+    this.sx = sx; this.sy = sy; this.sw = sw; this.sh = sh;
+    this.width = sw; this.height = sh;
+    this.naturalWidth = sw; this.naturalHeight = sh;
+    this.tagName = "IMG";
+  }
+  Object.defineProperty(Frame.prototype, "complete", { get: function () {
+    var sh = sheetImgs[this.sheetPath]; return !!(sh && sh._ok);
+  }});
+  Object.defineProperty(Frame.prototype, "_ok", { get: function () { return this.complete; }});
+  Object.defineProperty(Frame.prototype, "_err", { get: function () {
+    var sh = sheetImgs[this.sheetPath]; return !!(sh && sh._err);
+  }});
+  Object.defineProperty(Frame.prototype, "_started", { get: function () {
+    var sh = sheetImgs[this.sheetPath]; return !!(sh && sh._started);
+  }});
+
+  function drawFrame(img, dx, dy, dw, dh) {
+    if (!img) return;
+    if (img.sheetPath) {
+      var sheet = sheetImgs[img.sheetPath];
+      if (!sheet || !sheet._ok) {
+        if (img._err) {
+          ctx.save(); ctx.strokeStyle = "#ff3030"; ctx.lineWidth = 2;
+          ctx.fillStyle = "rgba(255,40,40,0.25)";
+          ctx.fillRect(dx, dy, dw, dh); ctx.strokeRect(dx, dy, dw, dh); ctx.restore();
+        }
+        return;
+      }
+      ctx.drawImage(sheet, img.sx, img.sy, img.sw, img.sh, dx, dy, dw, dh);
+      return;
+    }
+    if (!(img.complete && img.naturalWidth > 0)) {
+      if (img._err) {
+        ctx.save(); ctx.strokeStyle = "#ff3030"; ctx.lineWidth = 2;
+        ctx.fillStyle = "rgba(255,40,40,0.25)";
+        ctx.fillRect(dx, dy, dw, dh); ctx.strokeRect(dx, dy, dw, dh); ctx.restore();
+      }
+      return;
+    }
+    ctx.drawImage(img, dx, dy, dw, dh);
+  }
+
   function pumpLoads() {
+    var rotated = 0;
     while (loadActive < LOAD_CONCURRENCY && loadQueue.length) {
-      var img = loadQueue.shift();
-      if (img._ok || img._err || img._inflight) continue;
-      startLoad(img);
+      var job = loadQueue.shift();
+      if (!job || job.img._ok || job.img._err || job.img._inflight) continue;
+      if (loadMode === "match" && job.prio === "prefetch") {
+        loadQueue.push(job);
+        rotated++;
+        if (rotated >= loadQueue.length) break;
+        continue;
+      }
+      rotated = 0;
+      startLoad(job);
     }
   }
-  function startLoad(img) {
+
+  function startLoad(job) {
+    var img = job.img;
     img._inflight = true;
+    img._started = true;
     loadActive++;
-    var attempt = (img._tries || 0) + (img._timeouts || 0);
+    var tryN = (img._tries || 0) + (img._timeouts || 0);
+    var url = img._src + (tryN ? "&r=" + tryN : "");
+    var ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
     var finished = false;
+    var timer = setTimeout(function () {
+      if (!finish()) return;
+      img._timeouts = (img._timeouts || 0) + 1;
+      if (ctrl) try { ctrl.abort(); } catch (e0) {}
+      loadQueue.unshift(job);
+      pumpLoads();
+    }, 12000);
     function finish() {
       if (finished) return false;
       finished = true;
@@ -134,72 +210,88 @@
       loadActive--;
       return true;
     }
-    var timer = setTimeout(function () {
-      if (!finish()) return;
-      img._timeouts = (img._timeouts || 0) + 1; // timeout != failure
-      img.onload = img.onerror = null;
-      img.removeAttribute("src");
-      loadQueue.push(img);
-      pumpLoads();
-    }, LOAD_TIMEOUT_MS);
-    img.onload = function () {
-      if (!finish()) return;
-      img._ok = true;
-      pumpLoads();
-    };
-    img.onerror = function () {
-      if (!finish()) return;
+    function failRetry() {
       img._tries = (img._tries || 0) + 1;
       if (img._tries >= MAX_TRIES) {
         img._err = true;
         assetErrors.push(img._src);
-        if (window.console) console.error("[asset failed after retries] " + img._src);
+        if (window.console) console.error("[asset failed] " + img._src);
         pumpLoads();
         return;
       }
-      setTimeout(function () { loadQueue.unshift(img); pumpLoads(); }, 600 * img._tries);
+      setTimeout(function () { loadQueue.unshift(job); pumpLoads(); }, 350 * img._tries);
       pumpLoads();
-    };
-    img.src = img._src + (attempt ? "&r=" + attempt : "");
+    }
+    function attachBlob(blob) {
+      if (!finish()) return;
+      var obj = URL.createObjectURL(blob);
+      var done = false;
+      function settleOk() {
+        if (done) return; done = true;
+        img._ok = true;
+        pumpLoads();
+      }
+      function settleFail() {
+        if (done) return; done = true;
+        failRetry();
+      }
+      img.onload = settleOk;
+      img.onerror = settleFail;
+      img.src = obj;
+    }
+    if (typeof fetch === "function") {
+      fetch(url, ctrl ? { signal: ctrl.signal, cache: "default" } : { cache: "default" })
+        .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.blob(); })
+        .then(attachBlob)
+        .catch(function (e) {
+          if (e && e.name === "AbortError") return;
+          if (!finish()) return;
+          failRetry();
+        });
+    } else {
+      img.onload = function () { if (!finish()) return; img._ok = true; pumpLoads(); };
+      img.onerror = function () { if (!finish()) return; failRetry(); };
+      img.src = url;
+    }
   }
-  function regImg(img, src, group) {
+
+  function regImg(img, src, group, prio) {
     if (!ASSET_GROUPS[group]) group = "core";
     img._src = assetUrl(src);
     img._started = false;
+    img._prio = prio || (group === "core" ? "core" : "kit");
     ASSET_GROUPS[group].push(img);
-    if (group === "core") { img._started = true; loadQueue.push(img); setTimeout(pumpLoads, 0); }
     return img;
   }
-  function groupForPath(path) {
-    var head = String(path).split("/")[0];
-    return ASSET_GROUPS[head] && head !== "core" ? head : "core";
+  function enqueue(img, prio) {
+    if (img._ok || img._err || img._inflight) return;
+    var pr = prio || img._prio || "kit";
+    var job = { img: img, prio: pr };
+    if (pr === "match" || pr === "core") loadQueue.unshift(job);
+    else loadQueue.push(job);
+    pumpLoads();
   }
-  // Queue groups; urgent ones jump ahead of background prefetch.
-  function ensureGroups(list, urgent) {
-    var i, j, g, add = [];
+  function ensureGroups(list, prio) {
+    var i, j, g;
     for (i = 0; i < list.length; i++) {
       g = ASSET_GROUPS[list[i]] || [];
-      for (j = 0; j < g.length; j++) {
-        if (g[j]._ok || g[j]._err) continue;
-        g[j]._started = true;
-        add.push(g[j]);
-      }
+      for (j = 0; j < g.length; j++) enqueue(g[j], prio);
     }
-    if (urgent) {
-      loadQueue = add.concat(loadQueue.filter(function (x) { return add.indexOf(x) < 0; }));
-    } else {
-      for (i = 0; i < add.length; i++) if (loadQueue.indexOf(add[i]) < 0 && !add[i]._inflight) loadQueue.push(add[i]);
-    }
-    pumpLoads();
   }
   function retryFailed(list) {
     var i, j, g;
     for (i = 0; i < list.length; i++) {
       g = ASSET_GROUPS[list[i]] || [];
-      for (j = 0; j < g.length; j++) if (g[j]._err) { g[j]._err = false; g[j]._tries = 0; }
+      for (j = 0; j < g.length; j++) {
+        if (g[j]._err || g[j]._timeouts) {
+          g[j]._err = false; g[j]._tries = 0; g[j]._timeouts = 0; g[j]._ok = false;
+        }
+      }
     }
     assetErrors = [];
-    ensureGroups(list, true);
+    matchStall = false;
+    matchLoadStartedAt = performance.now();
+    ensureGroups(list, "match");
   }
   function groupProgress(list) {
     var i, j, g, tot = 0, done = 0, err = 0;
@@ -213,23 +305,80 @@
     }
     return { tot: tot, done: done, err: err };
   }
-  // Once the menu art is in, quietly prefetch every kit so a match usually starts instantly.
-  (function prefetchKits() {
-    var tries = 0;
-    var t = setInterval(function () {
-      var c = groupProgress(["core"]);
-      if (c.done + c.err >= c.tot || ++tries > 120) {
-        clearInterval(t);
-        ensureGroups(["obito", "pain", "tanjiro"], false);
+  function groupForPath(path) {
+    var head = String(path).split("/")[0];
+    return ASSET_GROUPS[head] && head !== "core" ? head : "core";
+  }
+
+  function framesFromStrip(folder, prefix, count) {
+    var arr = [], i, n;
+    for (i = 1; i <= count; i++) {
+      n = i < 10 ? "0" + i : String(i);
+      arr.push({ _id: folder + "/" + prefix + "_" + n, _kit: groupForPath(folder) });
+    }
+    return arr;
+  }
+  function framesNumbered(folder, count) {
+    var arr = [], i, n;
+    for (i = 1; i <= count; i++) {
+      n = i < 10 ? "0" + i : String(i);
+      arr.push({ _id: folder + "/" + n, _kit: groupForPath(folder) });
+    }
+    return arr;
+  }
+  function bindKitFrames(kitId) {
+    var info = sheetManifest && sheetManifest.kits[kitId];
+    if (!info) return;
+    function bindArr(arr) {
+      var i, id, meta, sheetFile, fr;
+      for (i = 0; i < arr.length; i++) {
+        if (!arr[i] || !arr[i]._id) continue;
+        id = arr[i]._id;
+        meta = info.frames[id];
+        if (!meta) { if (window.console) console.error("[frame missing] " + id); continue; }
+        sheetFile = info.sheets[meta.sheet];
+        fr = frameCache[id];
+        if (!fr) { fr = new Frame(sheetFile, meta.x, meta.y, meta.w, meta.h); frameCache[id] = fr; }
+        arr[i] = fr;
       }
-    }, 250);
-  })();
+    }
+    if (kitId === "obito") {
+      bindArr(obito.idle); bindArr(obito.walk); bindArr(obito.run); bindArr(obito.breath);
+      bindArr(obito.firebreath); bindArr(obito.phase); bindArr(obito.tele); bindArr(obito.punch);
+      bindArr(obito.cloth); bindArr(obito.knock);
+    } else if (kitId === "pain") {
+      bindArr(pain.idle); bindArr(pain.walk); bindArr(pain.run); bindArr(pain.dash);
+      bindArr(pain.back); bindArr(pain.jump); bindArr(pain.land); bindArr(pain.turn);
+      bindArr(pain.combo); bindArr(pain.kick); bindArr(pain.rod); bindArr(pain.push);
+      bindArr(pain.repulse); bindArr(pain.pullCast); bindArr(pain.pullFx); bindArr(pain.cloth);
+    } else if (kitId === "tanjiro") {
+      bindArr(tanjiro.idle); bindArr(tanjiro.ult1); bindArr(tanjiro.ult2);
+      bindArr(tanjiro.water.atk); bindArr(tanjiro.water.water2); bindArr(tanjiro.water.water2c);
+      bindArr(tanjiro.water.water4); bindArr(tanjiro.water.water1);
+      bindArr(tanjiro.fire.atk); bindArr(tanjiro.fire.water2); bindArr(tanjiro.fire.water2c);
+      bindArr(tanjiro.fire.water4); bindArr(tanjiro.fire.water1);
+    }
+  }
+  function registerKitSheets(kitId) {
+    var info = sheetManifest && sheetManifest.kits[kitId];
+    if (!info) return;
+    var i, path, img;
+    for (i = 0; i < info.sheets.length; i++) {
+      path = info.sheets[i];
+      if (sheetImgs[path]) continue;
+      img = regImg(new Image(), path, kitId, "kit");
+      sheetImgs[path] = img;
+    }
+    bindKitFrames(kitId);
+  }
+
   var cardImgs = {};
   (function loadCards() {
     var ids = ["obito", "pain", "tanjiro", "lockA", "lockB", "lockC"];
     var i;
     for (i = 0; i < ids.length; i++) {
-      var img = regImg(new Image(), "cards/" + ids[i] + ".png", "core");
+      var img = regImg(new Image(), "cards/" + ids[i] + ".png", "core", "core");
+      enqueue(img, "core");
       cardImgs[ids[i]] = img;
     }
   })();
@@ -243,7 +392,8 @@
   (function loadScrolls() {
     var i;
     for (i = 0; i < SCROLL_DEFS.length; i++) {
-      var img = regImg(new Image(), SCROLL_DEFS[i].icon, "core");
+      var img = regImg(new Image(), SCROLL_DEFS[i].icon, "core", "core");
+      enqueue(img, "core");
       scrollImgs[SCROLL_DEFS[i].id] = img;
     }
   })();
@@ -277,6 +427,7 @@
   var hudHidden = false;
   var hudHits = [];
   var uiLatch = 0;
+  var screenChangeAt = 0;
   var flowHint = document.getElementById("flowHint");
   var charRoster = [
     { id: "obito", name: "带土", unlocked: true, blurb: "虚化 · 喷火 · 空间" },
@@ -298,20 +449,17 @@
   var voidSpace = false;
   var voidT = 0; // pages20: 切空间 lasts at most VOID_DUR seconds
   var VOID_DUR = 4;
-  var arenaImg = regImg(new Image(), "arena-wide.png", "core");
-  var sharinganImg = regImg(new Image(), "sharingan.png", "core");
+  var voidUntil = 0; // performance.now() deadline
+  var fightClock = { stamp: 0, accum: 0, limit: 60 };
+  var arenaImg = regImg(new Image(), "arena-wide.png", "core", "core");
+  enqueue(arenaImg, "core");
+  var sharinganImg = regImg(new Image(), "sharingan.png", "core", "core");
+  enqueue(sharinganImg, "core");
 
   // Bump when sprite PNGs change so browsers/CDN do not serve stale frames.
   function loadStrip(prefix, count, folder) {
-    var arr = [];
-    var i;
     if (!folder) folder = "obito";
-    for (i = 1; i <= count; i++) {
-      var n = i < 10 ? "0" + i : String(i);
-      var img = regImg(new Image(), folder + "/" + prefix + "_" + n + ".png?v=" + ASSET_V, groupForPath(folder));
-      arr.push(img);
-    }
-    return arr;
+    return framesFromStrip(folder, prefix, count);
   }
   var obito = {
     idle: loadStrip("idle", 8),
@@ -330,7 +478,8 @@
     var ids = ["obito", "pain", "tanjiro"];
     var i;
     for (i = 0; i < ids.length; i++) {
-      var img = regImg(new Image(), "portraits/" + ids[i] + ".png?v=" + ASSET_V, "core");
+      var img = regImg(new Image(), "portraits/" + ids[i] + ".png", "core", "core");
+      enqueue(img, "core");
       portraitImgs[ids[i]] = img;
     }
   })();
@@ -398,14 +547,7 @@
     cloth: loadStrip("cloth", 12, "pain/cloth_float")
   };
   function loadNumbered(folder, count) {
-    var arr = [];
-    var i;
-    for (i = 1; i <= count; i++) {
-      var n = i < 10 ? "0" + i : String(i);
-      var img = regImg(new Image(), folder + "/" + n + ".png?v=" + ASSET_V, groupForPath(folder));
-      arr.push(img);
-    }
-    return arr;
+    return framesNumbered(folder, count);
   }
   function tanjiroFormFolder(fire) {
     return fire ? "tanjiro/fire" : "tanjiro/water";
@@ -1053,6 +1195,8 @@
     shake = 0;
     koId = null;
     voidSpace = false;
+    voidT = 0;
+    voidUntil = 0;
     phaseSlow = 0;
   }
 
@@ -1252,19 +1396,19 @@
   }
 
   function goIntro() {
-    matchState = "intro";
+    matchState = "intro"; screenChangeAt = performance.now();
     paused = false;
     syncFlowHint();
   }
 
   function goMode() {
-    matchState = "mode";
+    matchState = "mode"; screenChangeAt = performance.now();
     paused = false;
     syncFlowHint();
   }
 
   function goCharSelect() {
-    matchState = "charSelect";
+    matchState = "charSelect"; screenChangeAt = performance.now();
     paused = false;
     if (gameMode === "vs" || gameMode === "coop") {
       selectedL = null;
@@ -1377,10 +1521,15 @@
     var i;
     loadKits = [];
     for (i = 0; i < fs.length; i++) if (fs[i].kit && loadKits.indexOf(fs[i].kit) < 0) loadKits.push(fs[i].kit);
-    ensureGroups(loadKits.concat(["core"]), true);
+    // Register atlas images for the kits in this match, then load exclusively.
+    for (i = 0; i < loadKits.length; i++) registerKitSheets(loadKits[i]);
+    loadMode = "match";
+    matchStall = false;
+    matchLoadStartedAt = performance.now();
+    ensureGroups(loadKits.concat(["core"]), "match");
     loadT = 0;
     var pr = groupProgress(loadKits.concat(["core"]));
-    if (pr.done >= pr.tot) { beginCountdown(); return; }
+    if (pr.done >= pr.tot && pr.err === 0) { loadMode = "idle"; beginCountdown(); return; }
     matchState = "loading";
     syncFlowHint();
   }
@@ -1403,19 +1552,42 @@
     ctx.fillStyle = "#ccc";
     ctx.font = "14px sans-serif";
     ctx.fillText(pr.done + " / " + pr.tot, W / 2, by + 36);
-    if (pr.err) {
+    var stalled = matchStall || (matchLoadStartedAt && performance.now() - matchLoadStartedAt > 20000 && pr.done < pr.tot);
+    if (stalled) matchStall = true;
+    if (pr.err || matchStall) {
       ctx.fillStyle = "#ff6060";
-      ctx.fillText("有 " + pr.err + " 张素材多次重试仍失败：" + String(assetErrors[0] || "").split("?")[0], W / 2, by + 60);
-      if (pr.done + pr.err >= pr.tot) {
-        flowButton(W / 2 - 170, by + 80, 160, 40, "重试", true, function () { retryFailed(loadKits.concat(["core"])); });
-        flowButton(W / 2 + 10, by + 80, 160, 40, "返回菜单", false, function () { goMode(); });
-      }
+      if (pr.err) ctx.fillText("有 " + pr.err + " 张失败：" + String(assetErrors[0] || "").split("?")[0], W / 2, by + 60);
+      else ctx.fillText("加载卡住超过 20 秒，请重试（已加载 " + pr.done + "/" + pr.tot + "）", W / 2, by + 60);
+      flowButton(W / 2 - 170, by + 80, 160, 40, "重试", true, function () {
+        matchStall = false;
+        retryFailed(loadKits.concat(["core"]));
+      });
+      flowButton(W / 2 + 10, by + 80, 160, 40, "返回菜单", false, function () { loadMode = "idle"; goMode(); });
     } else {
       ctx.fillStyle = "rgba(200,210,220,0.6)";
-      ctx.fillText("素材加载齐全后自动开始", W / 2, by + 60);
+      ctx.fillText("素材加载齐全后自动开始 · 仅加载本局角色", W / 2, by + 60);
     }
   }
 
+  function fightClockReset(limit) {
+    fightClock.limit = limit || 60;
+    fightClock.accum = 0;
+    fightClock.stamp = 0;
+  }
+  function fightClockPause() {
+    if (fightClock.stamp) {
+      fightClock.accum += performance.now() - fightClock.stamp;
+      fightClock.stamp = 0;
+    }
+  }
+  function fightClockResume() {
+    if (!fightClock.stamp) fightClock.stamp = performance.now();
+  }
+  function fightClockElapsed() {
+    var t = fightClock.accum;
+    if (fightClock.stamp) t += performance.now() - fightClock.stamp;
+    return t / 1000;
+  }
   function beginCountdown() {
     reset();
     matchState = "countdown";
@@ -1491,6 +1663,10 @@
     syncFlowHint();
   }
 
+  function coreAssetsReady() {
+    var pr = groupProgress(["core"]);
+    return pr.tot > 0 && pr.done >= pr.tot && pr.err === 0;
+  }
   function isMenuState() {
     return matchState === "intro" || matchState === "mode" || matchState === "charSelect" || matchState === "result";
   }
@@ -2075,6 +2251,7 @@
   function castSpace(f) {
     voidSpace = !voidSpace;
     voidT = voidSpace ? VOID_DUR : 0;
+    voidUntil = voidSpace ? (performance.now() + VOID_DUR * 1000) : 0;
     f.anim = "cast";
     f.animT = 0;
     f.animDur = 0.2;
@@ -2340,38 +2517,39 @@
     f.aiIy = wantY;
     if (f.busy > 0 || f.dashT > 0 || f.shield > 0 || f.shieldWind > 0) return;
     if (f.aiThink > 0) return;
-    f.aiThink = 0.18 + Math.random() * 0.22;
+    // pages22: slower AI decision cadence (was 0.18–0.40s).
+    f.aiThink = 0.55 + Math.random() * 0.45;
     if (isPain(f)) {
       if (dist < 130 && f.skills.thrust && f.skills.thrust.cd <= 0 && f.chakra >= (f.skills.thrust.cost || 0)) {
         tryCast(f, "thrust");
         return;
       }
-      if (dist < 150 && f.skills.cleave && f.skills.cleave.cd <= 0 && f.chakra >= (f.skills.cleave.cost || 0) && Math.random() < 0.55) {
+      if (dist < 150 && f.skills.cleave && f.skills.cleave.cd <= 0 && f.chakra >= (f.skills.cleave.cost || 0) && Math.random() < 0.14) {
         tryCast(f, "cleave");
         return;
       }
-      if (dist > 160 && dist < 520 && f.skills.fire && f.skills.fire.cd <= 0 && f.chakra >= (f.skills.fire.cost || 0) && Math.random() < 0.45) {
+      if (dist > 160 && dist < 520 && f.skills.fire && f.skills.fire.cd <= 0 && f.chakra >= (f.skills.fire.cost || 0) && Math.random() < 0.06) {
         tryCast(f, "fire");
         return;
       }
-      if (dist < 110 && f.skills.swap && f.skills.swap.cd <= 0 && f.chakra >= (f.skills.swap.cost || 0) && Math.random() < 0.35) {
+      if (dist < 110 && f.skills.swap && f.skills.swap.cd <= 0 && f.chakra >= (f.skills.swap.cost || 0) && Math.random() < 0.16) {
         tryCast(f, "swap");
         return;
       }
-      if (dist > 90 && dist < 420 && f.skills.pull && f.skills.pull.cd <= 0 && f.chakra >= (f.skills.pull.cost || 0) && Math.random() < 0.28) {
+      if (dist > 90 && dist < 420 && f.skills.pull && f.skills.pull.cd <= 0 && f.chakra >= (f.skills.pull.cost || 0) && Math.random() < 0.14) {
         tryCast(f, "pull");
         return;
       }
-      if (dist < 150 && f.skills.spike && f.skills.spike.cd <= 0 && f.chakra >= (f.skills.spike.cost || 0) && Math.random() < 0.18) {
+      if (dist < 150 && f.skills.spike && f.skills.spike.cd <= 0 && f.chakra >= (f.skills.spike.cost || 0) && Math.random() < 0.09) {
         tryCast(f, "spike");
         return;
       }
     } else if (isTanjiro(f)) {
-      if (f.fireForm && f.skills.ult2 && Math.random() < 0.35) {
+      if (f.fireForm && f.skills.ult2 && Math.random() < 0.16) {
         tryCast(f, "ult2");
         return;
       }
-      if (!f.fireForm && dist < 220 && f.skills.ult1 && f.skills.ult1.cd <= 0 && f.chakra > 40 && Math.random() < 0.12) {
+      if (!f.fireForm && dist < 220 && f.skills.ult1 && f.skills.ult1.cd <= 0 && f.chakra > 40 && Math.random() < 0.06) {
         tryCast(f, "ult1");
         return;
       }
@@ -2379,19 +2557,19 @@
         tryCast(f, "atk");
         return;
       }
-      if (dist < 200 && f.skills.water4 && f.skills.water4.cd <= 0 && f.chakra >= 20 && Math.random() < 0.4) {
+      if (dist < 200 && f.skills.water4 && f.skills.water4.cd <= 0 && f.chakra >= 20 && Math.random() < 0.2) {
         tryCast(f, "water4");
         return;
       }
-      if (dist < 160 && f.skills.water1 && f.skills.water1.cd <= 0 && f.chakra >= 22 && Math.random() < 0.35) {
+      if (dist < 160 && f.skills.water1 && f.skills.water1.cd <= 0 && f.chakra >= 22 && Math.random() < 0.16) {
         tryCast(f, "water1");
         return;
       }
-      if (dist < 150 && f.skills.water2 && f.skills.water2.cd <= 0 && f.chakra >= 25 && Math.random() < 0.22) {
+      if (dist < 150 && f.skills.water2 && f.skills.water2.cd <= 0 && f.chakra >= 25 && Math.random() < 0.06) {
         tryCast(f, "water2");
         return;
       }
-      if (f.scrollId && f.skills[f.scrollId] && f.skills[f.scrollId].cd <= 0 && f.chakra >= (f.skills[f.scrollId].cost || 0) && Math.random() < 0.1) {
+      if (f.scrollId && f.skills[f.scrollId] && f.skills[f.scrollId].cd <= 0 && f.chakra >= (f.skills[f.scrollId].cost || 0) && Math.random() < 0.05) {
         tryCast(f, f.scrollId);
         return;
       }
@@ -2400,15 +2578,15 @@
         tryCast(f, "punch");
         return;
       }
-      if (dist > 140 && dist < 420 && f.skills.breath && f.skills.breath.cd <= 0 && f.chakra >= (f.skills.breath.cost || 0) && Math.random() < 0.4) {
+      if (dist > 140 && dist < 420 && f.skills.breath && f.skills.breath.cd <= 0 && f.chakra >= (f.skills.breath.cost || 0) && Math.random() < 0.2) {
         tryCast(f, "breath");
         return;
       }
-      if (dist > 100 && dist < 360 && f.skills.tele && f.skills.tele.cd <= 0 && f.chakra >= (f.skills.tele.cost || 0) && Math.random() < 0.35) {
+      if (dist > 100 && dist < 360 && f.skills.tele && f.skills.tele.cd <= 0 && f.chakra >= (f.skills.tele.cost || 0) && Math.random() < 0.16) {
         tryCast(f, "tele");
         return;
       }
-      if (dist < 160 && f.skills.phase && f.skills.phase.cd <= 0 && f.chakra >= (f.skills.phase.cost || 0) && f.phase <= 0 && Math.random() < 0.22) {
+      if (dist < 160 && f.skills.phase && f.skills.phase.cd <= 0 && f.chakra >= (f.skills.phase.cost || 0) && f.phase <= 0 && Math.random() < 0.06) {
         tryCast(f, "phase");
         return;
       }
@@ -2416,7 +2594,7 @@
         tryCast(f, "space");
         return;
       }
-      if (f.scrollId && f.skills[f.scrollId] && f.skills[f.scrollId].cd <= 0 && f.chakra >= (f.skills[f.scrollId].cost || 0) && Math.random() < 0.12) {
+      if (f.scrollId && f.skills[f.scrollId] && f.skills[f.scrollId].cd <= 0 && f.chakra >= (f.skills[f.scrollId].cost || 0) && Math.random() < 0.06) {
         tryCast(f, f.scrollId);
         return;
       }
@@ -2440,11 +2618,14 @@
   }
 
   function update(dt) {
+    // pages22: 切空间 uses wall-clock so simSpeed / low FPS cannot stretch it past 4s.
     if (voidSpace) {
-      voidT -= dt;
-      if (voidT <= 0) {
+      var leftMs = voidUntil - performance.now();
+      voidT = Math.max(0, leftMs / 1000);
+      if (leftMs <= 0) {
         voidSpace = false;
         voidT = 0;
+        voidUntil = 0;
         var oKitV = fighterByKit("obito");
         if (oKitV && oKitV.phase > 3) oKitV.phase = 3;
         if (oKitV) spawnFloater(oKitV.x, oKitV.y - 160, "返回", oKitV.palette.glow);
@@ -4724,7 +4905,7 @@
     ctx.fillStyle = paused ? "#3a2208" : "#f4efe6";
     ctx.fillRect(cx - 7, cy - 7, 4, 14);
     ctx.fillRect(cx + 3, cy - 7, 4, 14);
-    addHit(cx - r, cy - r, r * 2, r * 2, function () { paused = !paused; });
+    addHit(cx - r, cy - r, r * 2, r * 2, function () { paused = !paused; if (paused) fightClockPause(); else if (matchState === "fight") fightClockResume();; });
   }
 
   function drawSpeedChip(x, y, sp) {
@@ -4904,6 +5085,14 @@
   }
 
   function drawModeScreen() {
+    if (!coreAssetsReady()) {
+      panelBox(W / 2 - 340, 80, 680, 520);
+      ctx.textAlign = "center";
+      ctx.font = "bold 22px sans-serif";
+      ctx.fillStyle = "#f4fbff";
+      ctx.fillText("加载菜单素材…", W / 2, H / 2);
+      return;
+    }
     panelBox(W / 2 - 340, 120, 680, 420);
     ctx.textAlign = "center";
     ctx.font = "bold 36px sans-serif";
@@ -5187,6 +5376,18 @@
   }
 
   function drawVsCharSelectScreen() {
+    if (!coreAssetsReady()) {
+      panelBox(50, 28, W - 100, H - 56);
+      ctx.textAlign = "center";
+      ctx.font = "bold 22px sans-serif";
+      ctx.fillStyle = "#f4fbff";
+      ctx.fillText("加载菜单素材…", W / 2, H / 2);
+      var pr = groupProgress(["core"]);
+      ctx.font = "14px sans-serif";
+      ctx.fillStyle = "#aaa";
+      ctx.fillText(pr.done + " / " + pr.tot, W / 2, H / 2 + 28);
+      return;
+    }
     panelBox(40, 28, W - 80, H - 56);
     ctx.textAlign = "center";
     ctx.font = "bold 28px sans-serif";
@@ -5262,6 +5463,18 @@
   }
 
   function drawSoloCharSelectScreen() {
+    if (!coreAssetsReady()) {
+      panelBox(50, 28, W - 100, H - 56);
+      ctx.textAlign = "center";
+      ctx.font = "bold 22px sans-serif";
+      ctx.fillStyle = "#f4fbff";
+      ctx.fillText("加载菜单素材…", W / 2, H / 2);
+      var pr = groupProgress(["core"]);
+      ctx.font = "14px sans-serif";
+      ctx.fillStyle = "#aaa";
+      ctx.fillText(pr.done + " / " + pr.tot, W / 2, H / 2 + 28);
+      return;
+    }
     panelBox(50, 28, W - 100, H - 56);
     ctx.textAlign = "center";
     ctx.font = "bold 30px sans-serif";
@@ -5542,8 +5755,12 @@
     if (matchState === "loading") {
       loadT += dt;
       var lp = groupProgress(loadKits.concat(["core"]));
-      // Never enter the fight until every needed image is actually decoded.
-      if (lp.done >= lp.tot) beginCountdown();
+      if (matchLoadStartedAt && performance.now() - matchLoadStartedAt > 20000 && lp.done < lp.tot) matchStall = true;
+      if (lp.done >= lp.tot && lp.err === 0) {
+        loadMode = "idle";
+        matchStall = false;
+        beginCountdown();
+      }
       render();
       requestAnimationFrame(frame);
       return;
@@ -5562,7 +5779,14 @@
           countLeft = 0.95;
         } else {
           matchState = "fight";
-          matchTime = (gameMode === "practice") ? 99999 : 60;
+          if (gameMode === "practice") {
+            matchTime = 99999;
+            fightClockReset(99999);
+          } else {
+            fightClockReset(60);
+            matchTime = 60;
+          }
+          if (!paused) fightClockResume();
           syncFlowHint();
         }
       }
@@ -5580,8 +5804,9 @@
         updateAI(step);
         update(step);
       }
-      if (matchState === "fight" && step > 0 && gameMode !== "practice") {
-        matchTime -= step;
+      if (matchState === "fight" && gameMode !== "practice") {
+        // pages22: round timer = real seconds (ignores simSpeed and frame hitches).
+        matchTime = Math.max(0, fightClock.limit - fightClockElapsed());
         if (matchTime <= 0) {
           matchTime = 0;
           endByTime();
@@ -5824,11 +6049,11 @@
     if (!pt) return;
     if (stickAt(pt.x, pt.y)) return;
     var hi;
-    if (uiLatch > time) return;
+    if (performance.now() < uiLatch || performance.now() - screenChangeAt < 50) return;
     for (hi = hudHits.length - 1; hi >= 0; hi--) {
       var zone = hudHits[hi];
       if (pt.x >= zone.x && pt.x <= zone.x + zone.w && pt.y >= zone.y && pt.y <= zone.y + zone.h) {
-        uiLatch = time + 0.25;
+        uiLatch = performance.now() + 220;
         zone.fn();
         return;
       }
@@ -5870,11 +6095,11 @@
     var pt = canvasPoint(e);
     if (!pt) return;
     var hi;
-    if (uiLatch > time) return;
+    if (performance.now() < uiLatch || performance.now() - screenChangeAt < 50) return;
     for (hi = hudHits.length - 1; hi >= 0; hi--) {
       var zone = hudHits[hi];
       if (pt.x >= zone.x && pt.x <= zone.x + zone.w && pt.y >= zone.y && pt.y <= zone.y + zone.h) {
-        uiLatch = time + 0.25;
+        uiLatch = performance.now() + 220;
         e.preventDefault();
         zone.fn();
         return;
@@ -5914,6 +6139,12 @@
       phase: activeFighters().map(function (f) { return f.phase || 0; }),
       cds: activeFighters().map(function (f) { var o = {}, k; for (k in f.skills) o[k] = +(f.skills[k].cd || 0).toFixed(2); return o; }),
       assets: { core: groupProgress(["core"]), obito: groupProgress(["obito"]), pain: groupProgress(["pain"]), tanjiro: groupProgress(["tanjiro"]), errors: assetErrors.slice(0, 5) },
+      loadMode: loadMode,
+      matchStall: matchStall,
+      sheetCount: sheetManifest ? Object.keys(sheetManifest.kits).length : 0,
+      coreReady: coreReady,
+      voidUntilLeft: voidSpace ? Math.max(0, (voidUntil - performance.now()) / 1000) : 0,
+      fightElapsed: matchState === "fight" ? fightClockElapsed() : 0,
       assetV: ASSET_V
     };
   };
@@ -6019,6 +6250,34 @@
 
   reset();
   syncFlowHint();
+
+  // pages22: load atlas manifest, then core images. Kit sheets register on demand.
+  (function bootAssets() {
+    function beginCore() {
+      ensureGroups(["core"], "core");
+      var tries = 0;
+      var t = setInterval(function () {
+        if (coreAssetsReady() || ++tries > 240) {
+          clearInterval(t);
+          coreReady = true;
+          // Prefetch kit atlases only while idle (no match waiting).
+          if (sheetManifest) {
+            ["obito", "pain", "tanjiro"].forEach(function (k) { registerKitSheets(k); });
+            loadMode = "prefetch";
+            ensureGroups(["obito", "pain", "tanjiro"], "prefetch");
+          }
+        }
+      }, 200);
+    }
+    fetch(assetUrl("sheets/manifest.json"))
+      .then(function (r) { if (!r.ok) throw new Error("manifest " + r.status); return r.json(); })
+      .then(function (m) { sheetManifest = m; beginCore(); })
+      .catch(function (e) {
+        if (window.console) console.error("[manifest]", e);
+        beginCore();
+      });
+  })();
+
   requestAnimationFrame(frame);
 })();
 </script>
