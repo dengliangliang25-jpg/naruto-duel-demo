@@ -43,7 +43,7 @@
   var ctx = canvas.getContext("2d");
   // pages20: never silently draw nothing. Broken images get a red placeholder box;
   // images still in flight are skipped (match start is gated on loading anyway).
-    // pages22: route atlas frames through drawFrame; broken images get a red box.
+    // pages23: route atlas frames through drawFrame; broken images get a red box.
   (function guardDrawImage() {
     var raw = ctx.drawImage;
     ctx.drawImage = function (img) {
@@ -103,9 +103,9 @@
   var selectedScrollL = null; // 2P left scroll
   var selectedScrollR = null; // 2P right scroll
   var charHover = -1;
-  // pages22: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
+  // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
-  var ASSET_V = "pages22";
+  var ASSET_V = "pages23";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 4;
@@ -156,7 +156,7 @@
         }
         return;
       }
-      ctx.drawImage(sheet, img.sx, img.sy, img.sw, img.sh, dx, dy, dw, dh);
+      ctx.drawImage(sheet._bmp || sheet, img.sx, img.sy, img.sw, img.sh, dx, dy, dw, dh);
       return;
     }
     if (!(img.complete && img.naturalWidth > 0)) {
@@ -175,6 +175,7 @@
     while (loadActive < LOAD_CONCURRENCY && loadQueue.length) {
       var job = loadQueue.shift();
       if (!job || job.img._ok || job.img._err || job.img._inflight) continue;
+      if (job.prio === "prefetch" && loadActive >= 1) { loadQueue.push(job); rotated++; if (rotated >= loadQueue.length) break; continue; }
       if (loadMode === "match" && job.prio === "prefetch") {
         loadQueue.push(job);
         rotated++;
@@ -186,26 +187,38 @@
     }
   }
 
+  // pages23: streamed fetch with byte-progress; a request only "stalls" when no bytes
+  // arrive for STALL_MS. Decode runs async (createImageBitmap / img.decode) and is never
+  // counted as a stall. Loaded files are kept across retries.
+  var STALL_MS = 15000;
+  var lastLoadProgress = 0;
+  var decodingCount = 0;
+  function noteProgress() { lastLoadProgress = performance.now(); }
   function startLoad(job) {
     var img = job.img;
     img._inflight = true;
     img._started = true;
     loadActive++;
+    noteProgress();
     var tryN = (img._tries || 0) + (img._timeouts || 0);
     var url = img._src + (tryN ? "&r=" + tryN : "");
     var ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
     var finished = false;
-    var timer = setTimeout(function () {
-      if (!finish()) return;
-      img._timeouts = (img._timeouts || 0) + 1;
-      if (ctrl) try { ctrl.abort(); } catch (e0) {}
-      loadQueue.unshift(job);
-      pumpLoads();
-    }, 12000);
+    var lastByte = performance.now();
+    var watch = setInterval(function () {
+      if (finished) return;
+      if (performance.now() - lastByte > STALL_MS) {
+        if (!finish()) return;
+        img._timeouts = (img._timeouts || 0) + 1; // stall != failure
+        if (ctrl) try { ctrl.abort(); } catch (e0) {}
+        loadQueue.unshift(job);
+        pumpLoads();
+      }
+    }, 1000);
     function finish() {
       if (finished) return false;
       finished = true;
-      clearTimeout(timer);
+      clearInterval(watch);
       img._inflight = false;
       loadActive--;
       return true;
@@ -222,27 +235,45 @@
       setTimeout(function () { loadQueue.unshift(job); pumpLoads(); }, 350 * img._tries);
       pumpLoads();
     }
-    function attachBlob(blob) {
-      if (!finish()) return;
+    function decodeBlob(blob) {
+      if (!finish()) return; // network part done; free the slot before decoding
+      decodingCount++;
+      noteProgress();
+      img._decoding = true;
+      function ok() { img._decoding = false; decodingCount--; img._ok = true; noteProgress(); pumpLoads(); }
+      function bad() { img._decoding = false; decodingCount--; failRetry(); }
+      if (img._isSheet && typeof createImageBitmap === "function") {
+        createImageBitmap(blob).then(function (bmp) { img._bmp = bmp; ok(); }, bad);
+        return;
+      }
       var obj = URL.createObjectURL(blob);
-      var done = false;
-      function settleOk() {
-        if (done) return; done = true;
-        img._ok = true;
-        pumpLoads();
-      }
-      function settleFail() {
-        if (done) return; done = true;
-        failRetry();
-      }
-      img.onload = settleOk;
-      img.onerror = settleFail;
+      img.onload = null; img.onerror = null;
       img.src = obj;
+      if (img.decode) img.decode().then(ok, function () {
+        if (img.complete && img.naturalWidth > 0) ok(); else bad();
+      });
+      else { img.onload = ok; img.onerror = bad; }
+    }
+    function readAll(r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      if (!r.body || !r.body.getReader) return r.blob();
+      var reader = r.body.getReader(), chunks = [];
+      var type = r.headers.get("content-type") || "image/webp";
+      function pump() {
+        return reader.read().then(function (res) {
+          if (res.done) return new Blob(chunks, { type: type });
+          chunks.push(res.value);
+          lastByte = performance.now();
+          noteProgress();
+          return pump();
+        });
+      }
+      return pump();
     }
     if (typeof fetch === "function") {
-      fetch(url, ctrl ? { signal: ctrl.signal, cache: "default" } : { cache: "default" })
-        .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.blob(); })
-        .then(attachBlob)
+      fetch(url, ctrl ? { signal: ctrl.signal } : {})
+        .then(readAll)
+        .then(decodeBlob)
         .catch(function (e) {
           if (e && e.name === "AbortError") return;
           if (!finish()) return;
@@ -279,18 +310,18 @@
     }
   }
   function retryFailed(list) {
+    // Only failed files are re-requested; anything already loaded/decoding is kept.
     var i, j, g;
     for (i = 0; i < list.length; i++) {
       g = ASSET_GROUPS[list[i]] || [];
       for (j = 0; j < g.length; j++) {
-        if (g[j]._err || g[j]._timeouts) {
-          g[j]._err = false; g[j]._tries = 0; g[j]._timeouts = 0; g[j]._ok = false;
-        }
+        if (g[j]._err) { g[j]._err = false; g[j]._tries = 0; }
       }
     }
     assetErrors = [];
     matchStall = false;
-    matchLoadStartedAt = performance.now();
+    noteProgress();
+    loadMode = "match";
     ensureGroups(list, "match");
   }
   function groupProgress(list) {
@@ -367,6 +398,7 @@
       path = info.sheets[i];
       if (sheetImgs[path]) continue;
       img = regImg(new Image(), path, kitId, "kit");
+      img._isSheet = true;
       sheetImgs[path] = img;
     }
     bindKitFrames(kitId);
@@ -1526,10 +1558,11 @@
     loadMode = "match";
     matchStall = false;
     matchLoadStartedAt = performance.now();
+    noteProgress();
     ensureGroups(loadKits.concat(["core"]), "match");
     loadT = 0;
     var pr = groupProgress(loadKits.concat(["core"]));
-    if (pr.done >= pr.tot && pr.err === 0) { loadMode = "idle"; beginCountdown(); return; }
+    if (sheetManifest && pr.done >= pr.tot && pr.err === 0) { loadMode = "idle"; beginCountdown(); return; }
     matchState = "loading";
     syncFlowHint();
   }
@@ -1552,7 +1585,7 @@
     ctx.fillStyle = "#ccc";
     ctx.font = "14px sans-serif";
     ctx.fillText(pr.done + " / " + pr.tot, W / 2, by + 36);
-    var stalled = matchStall || (matchLoadStartedAt && performance.now() - matchLoadStartedAt > 20000 && pr.done < pr.tot);
+    var stalled = matchStall || (pr.done < pr.tot && decodingCount === 0 && performance.now() - lastLoadProgress > 20000);
     if (stalled) matchStall = true;
     if (pr.err || matchStall) {
       ctx.fillStyle = "#ff6060";
@@ -1663,9 +1696,12 @@
     syncFlowHint();
   }
 
+  // Menu only needs cards + scroll icons (loaded once, kept for the session).
   function coreAssetsReady() {
-    var pr = groupProgress(["core"]);
-    return pr.tot > 0 && pr.done >= pr.tot && pr.err === 0;
+    var k, im;
+    for (k in cardImgs) { im = cardImgs[k]; if (!im._ok && !im._err) return false; }
+    for (k in scrollImgs) { im = scrollImgs[k]; if (!im._ok && !im._err) return false; }
+    return true;
   }
   function isMenuState() {
     return matchState === "intro" || matchState === "mode" || matchState === "charSelect" || matchState === "result";
@@ -2517,7 +2553,7 @@
     f.aiIy = wantY;
     if (f.busy > 0 || f.dashT > 0 || f.shield > 0 || f.shieldWind > 0) return;
     if (f.aiThink > 0) return;
-    // pages22: slower AI decision cadence (was 0.18–0.40s).
+    // pages23: slower AI decision cadence (was 0.18–0.40s).
     f.aiThink = 0.55 + Math.random() * 0.45;
     if (isPain(f)) {
       if (dist < 130 && f.skills.thrust && f.skills.thrust.cd <= 0 && f.chakra >= (f.skills.thrust.cost || 0)) {
@@ -2618,7 +2654,7 @@
   }
 
   function update(dt) {
-    // pages22: 切空间 uses wall-clock so simSpeed / low FPS cannot stretch it past 4s.
+    // pages23: 切空间 uses wall-clock so simSpeed / low FPS cannot stretch it past 4s.
     if (voidSpace) {
       var leftMs = voidUntil - performance.now();
       voidT = Math.max(0, leftMs / 1000);
@@ -5085,14 +5121,6 @@
   }
 
   function drawModeScreen() {
-    if (!coreAssetsReady()) {
-      panelBox(W / 2 - 340, 80, 680, 520);
-      ctx.textAlign = "center";
-      ctx.font = "bold 22px sans-serif";
-      ctx.fillStyle = "#f4fbff";
-      ctx.fillText("加载菜单素材…", W / 2, H / 2);
-      return;
-    }
     panelBox(W / 2 - 340, 120, 680, 420);
     ctx.textAlign = "center";
     ctx.font = "bold 36px sans-serif";
@@ -5754,8 +5782,14 @@
     }
     if (matchState === "loading") {
       loadT += dt;
+      if (sheetManifest) {
+        for (var lk = 0; lk < loadKits.length; lk++) {
+          if (!(ASSET_GROUPS[loadKits[lk]] || []).length) { registerKitSheets(loadKits[lk]); ensureGroups([loadKits[lk]], "match"); }
+        }
+      }
       var lp = groupProgress(loadKits.concat(["core"]));
-      if (matchLoadStartedAt && performance.now() - matchLoadStartedAt > 20000 && lp.done < lp.tot) matchStall = true;
+      if (!sheetManifest) lp.tot = lp.done + 1;
+      if (lp.done < lp.tot && decodingCount === 0 && performance.now() - lastLoadProgress > 20000) matchStall = true;
       if (lp.done >= lp.tot && lp.err === 0) {
         loadMode = "idle";
         matchStall = false;
@@ -5805,7 +5839,7 @@
         update(step);
       }
       if (matchState === "fight" && gameMode !== "practice") {
-        // pages22: round timer = real seconds (ignores simSpeed and frame hitches).
+        // pages23: round timer = real seconds (ignores simSpeed and frame hitches).
         matchTime = Math.max(0, fightClock.limit - fightClockElapsed());
         if (matchTime <= 0) {
           matchTime = 0;
@@ -6143,6 +6177,8 @@
       matchStall: matchStall,
       sheetCount: sheetManifest ? Object.keys(sheetManifest.kits).length : 0,
       coreReady: coreReady,
+      menuReady: coreAssetsReady(),
+      sheetSizes: Object.keys(sheetImgs).map(function (k) { var b = sheetImgs[k]._bmp; return k + ":" + (b ? b.width + "x" + b.height : "-"); }),
       voidUntilLeft: voidSpace ? Math.max(0, (voidUntil - performance.now()) / 1000) : 0,
       fightElapsed: matchState === "fight" ? fightClockElapsed() : 0,
       assetV: ASSET_V
@@ -6251,31 +6287,26 @@
   reset();
   syncFlowHint();
 
-  // pages22: load atlas manifest, then core images. Kit sheets register on demand.
+  // pages23: load atlas manifest, then core images. Kit sheets register on demand.
   (function bootAssets() {
-    function beginCore() {
-      ensureGroups(["core"], "core");
-      var tries = 0;
-      var t = setInterval(function () {
-        if (coreAssetsReady() || ++tries > 240) {
-          clearInterval(t);
-          coreReady = true;
-          // Prefetch kit atlases only while idle (no match waiting).
-          if (sheetManifest) {
-            ["obito", "pain", "tanjiro"].forEach(function (k) { registerKitSheets(k); });
-            loadMode = "prefetch";
-            ensureGroups(["obito", "pain", "tanjiro"], "prefetch");
-          }
-        }
-      }, 200);
-    }
+    // Menu art first (cards + scroll icons were enqueued at registration); stage/portraits follow.
+    ensureGroups(["core"], "core");
     fetch(assetUrl("sheets/manifest.json"))
       .then(function (r) { if (!r.ok) throw new Error("manifest " + r.status); return r.json(); })
-      .then(function (m) { sheetManifest = m; beginCore(); })
-      .catch(function (e) {
-        if (window.console) console.error("[manifest]", e);
-        beginCore();
-      });
+      .then(function (m) {
+        sheetManifest = m;
+        var t = setInterval(function () {
+          var c = groupProgress(["core"]);
+          if (c.done + c.err < c.tot) return;
+          clearInterval(t);
+          coreReady = true;
+          if (loadMode === "match") return;
+          ["obito", "pain", "tanjiro"].forEach(function (k) { registerKitSheets(k); });
+          loadMode = "prefetch";
+          ensureGroups(["obito", "pain", "tanjiro"], "prefetch");
+        }, 200);
+      })
+      .catch(function (e) { if (window.console) console.error("[manifest]", e); });
   })();
 
   requestAnimationFrame(frame);
