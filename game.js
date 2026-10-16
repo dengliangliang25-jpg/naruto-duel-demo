@@ -1,0 +1,6323 @@
+(function () {
+  "use strict";
+
+  var canvas = document.getElementById("arena");
+  var ctx = canvas.getContext("2d");
+  // pages20: never silently draw nothing. Broken images get a red placeholder box;
+  // images still in flight are skipped (match start is gated on loading anyway).
+    // pages23: route atlas frames through drawFrame; broken images get a red box.
+  (function guardDrawImage() {
+    var raw = ctx.drawImage;
+    ctx.drawImage = function (img) {
+      if (img && img.sheetPath) {
+        var a = arguments;
+        if (a.length >= 5) drawFrame(img, a[1], a[2], a[3], a[4]);
+        return;
+      }
+      if (img && img.tagName === "IMG" && !(img.complete && img.naturalWidth > 0)) {
+        if (img._err) {
+          var a2 = arguments, x, y, w, h;
+          if (a2.length >= 9) { x = a2[5]; y = a2[6]; w = a2[7]; h = a2[8]; }
+          else if (a2.length >= 5) { x = a2[1]; y = a2[2]; w = a2[3]; h = a2[4]; }
+          else { x = a2[1]; y = a2[2]; w = 60; h = 120; }
+          ctx.save();
+          ctx.strokeStyle = "#ff3030"; ctx.lineWidth = 2;
+          ctx.fillStyle = "rgba(255,40,40,0.25)";
+          ctx.fillRect(x, y, w, h); ctx.strokeRect(x, y, w, h);
+          ctx.restore();
+        }
+        return;
+      }
+      return raw.apply(ctx, arguments);
+    };
+  })();
+  var W = 1280;
+  var H = 720;
+  var MIN_Y = 418;
+  var MAX_Y = 662;
+  var FAR_L = 430;
+  var FAR_R = 850;
+  var NEAR_L = 160;
+  var NEAR_R = 1120;
+
+  var keysDown = Object.create(null);
+  var time = 0;
+  var shake = 0;
+  var koId = null;
+  // Flow states: intro | mode | charSelect | countdown | fight | roundEnd | result
+  var matchState = "intro";
+  var countLeft = 3;
+  var matchTime = 60;
+  var matchResult = null;
+  var gameMode = "ai"; // ai | vs | coop | practice
+  var practiceDummy = true; // passive dummy vs light AI
+  var practiceNoCdAll = false;
+  var practiceNoCd = {}; // skillId -> bool
+  var practicePanel = false;
+  var countdownPhase = "round"; // round | fight
+  var playerSide = "L"; // which side the human controls in AI mode
+  var coopAiKits = ["pain", "obito"]; // filled on beginMatch
+  var selectedChar = "obito"; // roster id chosen in char select (solo)
+  var selectedL = null; // 2P left pick
+  var selectedR = null; // 2P right pick
+  var vsAssignSide = "L"; // which slot receives the next card click in 2P
+  var selectedScroll = null; // solo human scroll id
+  var selectedScrollL = null; // 2P left scroll
+  var selectedScrollR = null; // 2P right scroll
+  var charHover = -1;
+  // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
+  // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
+  var ASSET_V = "pages24";
+  var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [] };
+  var assetErrors = [];
+  var LOAD_CONCURRENCY = 6;
+  var MAX_TRIES = 6;
+  var loadQueue = [];
+  var loadActive = 0;
+  var loadMode = "idle"; // idle | match | prefetch
+  var matchLoadStartedAt = 0;
+  var matchStall = false;
+  var sheetManifest = null;
+  var sheetImgs = {};
+  var frameCache = {};
+  var coreReady = false;
+
+  function assetUrl(src) {
+    var base = String(src).split("?")[0];
+    if (!/\.webp$/i.test(base) && !/\.json$/i.test(base)) base = base.replace(/\.png$/i, ".webp");
+    return base + "?v=" + ASSET_V;
+  }
+
+  function Frame(sheetPath, sx, sy, sw, sh) {
+    this.sheetPath = sheetPath;
+    this.sx = sx; this.sy = sy; this.sw = sw; this.sh = sh;
+    this.width = sw; this.height = sh;
+    this.naturalWidth = sw; this.naturalHeight = sh;
+    this.tagName = "IMG";
+  }
+  Object.defineProperty(Frame.prototype, "complete", { get: function () {
+    var sh = sheetImgs[this.sheetPath]; return !!(sh && sh._ok);
+  }});
+  Object.defineProperty(Frame.prototype, "_ok", { get: function () { return this.complete; }});
+  Object.defineProperty(Frame.prototype, "_err", { get: function () {
+    var sh = sheetImgs[this.sheetPath]; return !!(sh && sh._err);
+  }});
+  Object.defineProperty(Frame.prototype, "_started", { get: function () {
+    var sh = sheetImgs[this.sheetPath]; return !!(sh && sh._started);
+  }});
+
+  function drawFrame(img, dx, dy, dw, dh) {
+    if (!img) return;
+    if (img.sheetPath) {
+      var sheet = sheetImgs[img.sheetPath];
+      if (!sheet || !sheet._ok) {
+        if (img._err) {
+          ctx.save(); ctx.strokeStyle = "#ff3030"; ctx.lineWidth = 2;
+          ctx.fillStyle = "rgba(255,40,40,0.25)";
+          ctx.fillRect(dx, dy, dw, dh); ctx.strokeRect(dx, dy, dw, dh); ctx.restore();
+        }
+        return;
+      }
+      ctx.drawImage(sheet._bmp || sheet, img.sx, img.sy, img.sw, img.sh, dx, dy, dw, dh);
+      return;
+    }
+    if (!(img.complete && img.naturalWidth > 0)) {
+      if (img._err) {
+        ctx.save(); ctx.strokeStyle = "#ff3030"; ctx.lineWidth = 2;
+        ctx.fillStyle = "rgba(255,40,40,0.25)";
+        ctx.fillRect(dx, dy, dw, dh); ctx.strokeRect(dx, dy, dw, dh); ctx.restore();
+      }
+      return;
+    }
+    ctx.drawImage(img, dx, dy, dw, dh);
+  }
+
+  function pumpLoads() {
+    var rotated = 0;
+    while (loadActive < LOAD_CONCURRENCY && loadQueue.length) {
+      var job = loadQueue.shift();
+      if (!job || job.img._ok || job.img._err || job.img._inflight) continue;
+      if (job.prio === "prefetch" && loadActive >= 1) { loadQueue.push(job); rotated++; if (rotated >= loadQueue.length) break; continue; }
+      if (loadMode === "match" && job.prio === "prefetch") {
+        loadQueue.push(job);
+        rotated++;
+        if (rotated >= loadQueue.length) break;
+        continue;
+      }
+      rotated = 0;
+      startLoad(job);
+    }
+  }
+
+  // pages24 loader. Root cause found on the desktop Chrome: its egress proxy throttles
+  // some connections to a few KB/s, so a fetch body can trickle forever. Every stage now
+  // has a hard wall-clock deadline (Promise.race); a slow file is aborted and re-requested
+  // on a fresh connection. Decode: createImageBitmap → <img>.decode() → plain <img>,
+  // each raced against a timeout. An independent setInterval watchdog drives the retry UI.
+  var lastLoadProgress = 0;  // last time a FILE completed (not bytes)
+  var decodingCount = 0;
+  var inflightJobs = [];     // {img, stage, t0, deadline}
+  var DECODE_MS = 6000;
+  function noteProgress() { lastLoadProgress = performance.now(); }
+  function withTimeout(promise, ms, label) {
+    return Promise.race([promise, new Promise(function (_, rej) {
+      setTimeout(function () { var e = new Error(label + " timeout"); e.isTimeout = true; rej(e); }, ms);
+    })]);
+  }
+  function fileName(u) { return String(u || "").split("?")[0].split("/").slice(-2).join("/"); }
+  function startLoad(job) {
+    var img = job.img;
+    img._inflight = true;
+    img._started = true;
+    loadActive++;
+    var tryN = (img._tries || 0);
+    var url = img._src + (tryN ? "&r=" + tryN + "_" + Math.floor(Math.random() * 1e6) : "");
+    var ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
+    var bytes = img._bytes || 120000;
+    var dlMs = 7000 + Math.round(bytes / 40); // 40 KB/s floor + 7s headroom
+    var rec = { img: img, stage: "下载", t0: performance.now(), deadline: performance.now() + dlMs, url: url };
+    inflightJobs.push(rec);
+    var finished = false;
+    function finish() {
+      if (finished) return false;
+      finished = true;
+      img._inflight = false;
+      loadActive--;
+      var k = inflightJobs.indexOf(rec);
+      if (k >= 0) inflightJobs.splice(k, 1);
+      return true;
+    }
+    function failRetry(reason) {
+      img._tries = (img._tries || 0) + 1;
+      img._lastFail = reason;
+      if (window.console) console.warn("[asset retry " + img._tries + "] " + fileName(img._src) + " · " + reason);
+      if (img._tries >= MAX_TRIES) {
+        img._err = true;
+        assetErrors.push(fileName(img._src) + "（" + reason + "）");
+        if (window.console) console.error("[asset failed] " + img._src + " · " + reason);
+        pumpLoads();
+        return;
+      }
+      loadQueue.unshift(job);
+      pumpLoads();
+    }
+    function done(how) {
+      img._decodedBy = how;
+      img._ok = true;
+      noteProgress();
+      pumpLoads();
+    }
+    function decodeBlob(blob) {
+      // network slot is freed here; decode runs on its own deadline.
+      rec.stage = "解码";
+      rec.deadline = performance.now() + DECODE_MS * 2 + 1000;
+      var bmpTry = (img._isSheet && typeof createImageBitmap === "function" && !window.__NO_BITMAP__)
+        ? withTimeout(createImageBitmap(blob), DECODE_MS, "createImageBitmap").then(function (bmp) { img._bmp = bmp; return "bitmap"; })
+        : Promise.reject(new Error("skip bitmap"));
+      return bmpTry.catch(function () {
+        img._bmp = null;
+        var obj = URL.createObjectURL(blob);
+        var loaded = new Promise(function (res, rej) {
+          img.onload = function () { res("img"); };
+          img.onerror = function () { rej(new Error("img onerror")); };
+        });
+        img.src = obj;
+        var dec = img.decode ? img.decode().then(function () { return "img.decode"; }) : loaded;
+        return withTimeout(dec, DECODE_MS, "img.decode").catch(function () {
+          // decode() hung or rejected: fall back to the plain <img> load event.
+          return withTimeout(loaded, DECODE_MS, "img.onload");
+        });
+      });
+    }
+    var p = (typeof fetch === "function")
+      ? withTimeout(fetch(url, ctrl ? { signal: ctrl.signal } : {}).then(function (r) {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.blob();
+        }), dlMs, "下载")
+      : new Promise(function (res, rej) { img.onload = function () { res(null); }; img.onerror = rej; img.src = url; });
+    p.then(function (blob) {
+      if (!blob) return "img";
+      // Free the network slot now so the next file can start downloading.
+      img._inflight = false; loadActive--; finished = true;
+      var k = inflightJobs.indexOf(rec); if (k >= 0) inflightJobs.splice(k, 1);
+      decodingCount++;
+      img._decoding = true;
+      var drec = { img: img, stage: "解码", t0: performance.now(), deadline: performance.now() + DECODE_MS * 2 + 1000 };
+      inflightJobs.push(drec);
+      return decodeBlob(blob).then(function (how) {
+        decodingCount--; img._decoding = false;
+        var k2 = inflightJobs.indexOf(drec); if (k2 >= 0) inflightJobs.splice(k2, 1);
+        return how;
+      }, function (e) {
+        decodingCount--; img._decoding = false;
+        var k3 = inflightJobs.indexOf(drec); if (k3 >= 0) inflightJobs.splice(k3, 1);
+        throw e;
+      });
+    }).then(function (how) {
+      if (!finished) finish();
+      done(how);
+    }, function (e) {
+      if (ctrl) try { ctrl.abort(); } catch (e0) {}
+      var wasDownloading = !finished;
+      if (wasDownloading) finish();
+      failRetry((e && e.message) || "error");
+    });
+  }
+  // Independent watchdog — does not depend on progress events or rAF.
+  setInterval(function () {
+    if (matchState !== "loading") return;
+    var now = performance.now();
+    if (now - lastLoadProgress > 20000) matchStall = true;
+  }, 1000);
+  function loadStatusLines() {
+    var now = performance.now(), out = [], i, r;
+    for (i = 0; i < inflightJobs.length && out.length < 4; i++) {
+      r = inflightJobs[i];
+      out.push(fileName(r.img._src) + " · " + r.stage + " " + ((now - r.t0) / 1000).toFixed(0) + "s" + (r.img._tries ? " · 第" + (r.img._tries + 1) + "次" : ""));
+    }
+    return out;
+  }
+
+  function regImg(img, src, group, prio) {
+    if (!ASSET_GROUPS[group]) group = "core";
+    img._src = assetUrl(src);
+    img._started = false;
+    img._prio = prio || (group === "core" ? "core" : "kit");
+    ASSET_GROUPS[group].push(img);
+    return img;
+  }
+  function enqueue(img, prio) {
+    if (img._ok || img._err || img._inflight) return;
+    var pr = prio || img._prio || "kit";
+    var job = { img: img, prio: pr };
+    if (pr === "match" || pr === "core") loadQueue.unshift(job);
+    else loadQueue.push(job);
+    pumpLoads();
+  }
+  function ensureGroups(list, prio) {
+    var i, j, g;
+    for (i = 0; i < list.length; i++) {
+      g = ASSET_GROUPS[list[i]] || [];
+      for (j = 0; j < g.length; j++) enqueue(g[j], prio);
+    }
+  }
+  function retryFailed(list) {
+    // Only failed files are re-requested; anything already loaded/decoding is kept.
+    var i, j, g;
+    for (i = 0; i < list.length; i++) {
+      g = ASSET_GROUPS[list[i]] || [];
+      for (j = 0; j < g.length; j++) {
+        if (g[j]._err) { g[j]._err = false; g[j]._tries = 0; }
+      }
+    }
+    assetErrors = [];
+    matchStall = false;
+    noteProgress();
+    loadMode = "match";
+    ensureGroups(list, "match");
+  }
+  function groupProgress(list) {
+    var i, j, g, tot = 0, done = 0, err = 0;
+    for (i = 0; i < list.length; i++) {
+      g = ASSET_GROUPS[list[i]] || [];
+      for (j = 0; j < g.length; j++) {
+        tot++;
+        if (g[j]._err) err++;
+        else if (g[j]._ok) done++;
+      }
+    }
+    return { tot: tot, done: done, err: err };
+  }
+  function groupForPath(path) {
+    var head = String(path).split("/")[0];
+    return ASSET_GROUPS[head] && head !== "core" ? head : "core";
+  }
+
+  function framesFromStrip(folder, prefix, count) {
+    var arr = [], i, n;
+    for (i = 1; i <= count; i++) {
+      n = i < 10 ? "0" + i : String(i);
+      arr.push({ _id: folder + "/" + prefix + "_" + n, _kit: groupForPath(folder) });
+    }
+    return arr;
+  }
+  function framesNumbered(folder, count) {
+    var arr = [], i, n;
+    for (i = 1; i <= count; i++) {
+      n = i < 10 ? "0" + i : String(i);
+      arr.push({ _id: folder + "/" + n, _kit: groupForPath(folder) });
+    }
+    return arr;
+  }
+  function bindKitFrames(kitId) {
+    var info = sheetManifest && sheetManifest.kits[kitId];
+    if (!info) return;
+    function bindArr(arr) {
+      var i, id, meta, sheetFile, fr;
+      for (i = 0; i < arr.length; i++) {
+        if (!arr[i] || !arr[i]._id) continue;
+        id = arr[i]._id;
+        meta = info.frames[id];
+        if (!meta) { if (window.console) console.error("[frame missing] " + id); continue; }
+        sheetFile = info.sheets[meta.sheet];
+        fr = frameCache[id];
+        if (!fr) { fr = new Frame(sheetFile, meta.x, meta.y, meta.sw || meta.w, meta.sh || meta.h); fr.width = fr.naturalWidth = meta.w; fr.height = fr.naturalHeight = meta.h; frameCache[id] = fr; }
+        arr[i] = fr;
+      }
+    }
+    if (kitId === "obito") {
+      bindArr(obito.idle); bindArr(obito.walk); bindArr(obito.run); bindArr(obito.breath);
+      bindArr(obito.firebreath); bindArr(obito.phase); bindArr(obito.tele); bindArr(obito.punch);
+      bindArr(obito.cloth); bindArr(obito.knock);
+    } else if (kitId === "pain") {
+      bindArr(pain.idle); bindArr(pain.walk); bindArr(pain.run); bindArr(pain.dash);
+      bindArr(pain.back); bindArr(pain.jump); bindArr(pain.land); bindArr(pain.turn);
+      bindArr(pain.combo); bindArr(pain.kick); bindArr(pain.rod); bindArr(pain.push);
+      bindArr(pain.repulse); bindArr(pain.pullCast); bindArr(pain.pullFx); bindArr(pain.cloth);
+    } else if (kitId === "tanjiro") {
+      bindArr(tanjiro.idle); bindArr(tanjiro.ult1); bindArr(tanjiro.ult2);
+      bindArr(tanjiro.water.atk); bindArr(tanjiro.water.water2); bindArr(tanjiro.water.water2c);
+      bindArr(tanjiro.water.water4); bindArr(tanjiro.water.water1);
+      bindArr(tanjiro.fire.atk); bindArr(tanjiro.fire.water2); bindArr(tanjiro.fire.water2c);
+      bindArr(tanjiro.fire.water4); bindArr(tanjiro.fire.water1);
+    }
+  }
+  function registerKitSheets(kitId) {
+    var info = sheetManifest && sheetManifest.kits[kitId];
+    if (!info) return;
+    var i, path, img;
+    for (i = 0; i < info.sheets.length; i++) {
+      path = info.sheets[i];
+      if (sheetImgs[path]) continue;
+      img = regImg(new Image(), path, kitId, "kit");
+      img._isSheet = true;
+      img._bytes = (info.bytes && info.bytes[i]) || 300000;
+      sheetImgs[path] = img;
+    }
+    bindKitFrames(kitId);
+  }
+
+  var cardImgs = {};
+  (function loadCards() {
+    var ids = ["obito", "pain", "tanjiro", "lockA", "lockB", "lockC"];
+    var i;
+    for (i = 0; i < ids.length; i++) {
+      var img = regImg(new Image(), "cards/" + ids[i] + ".png", "core", "core");
+      enqueue(img, "core");
+      cardImgs[ids[i]] = img;
+    }
+  })();
+  var SCROLL_DEFS = [
+    { id: "scroll_quake", name: "霸体", role: "密卷", color: "#e07030", icon: "icons/icon_01.png", max: 18.2, cost: 18, dmg: 0 },
+    { id: "scroll_bolt", name: "回蓝", role: "密卷", color: "#40c0ff", icon: "icons/icon_02.png", max: 20.8, cost: 0, dmg: 0 },
+    { id: "scroll_blade", name: "清CD", role: "密卷", color: "#f0c040", icon: "icons/icon_03.png", max: 23.4, cost: 12, dmg: 0 },
+    { id: "scroll_gale", name: "驱散", role: "密卷", color: "#5080ff", icon: "icons/icon_04.png", max: 15.6, cost: 16, dmg: 0 }
+  ];
+  var scrollImgs = {};
+  (function loadScrolls() {
+    var i;
+    for (i = 0; i < SCROLL_DEFS.length; i++) {
+      var img = regImg(new Image(), SCROLL_DEFS[i].icon, "core", "core");
+      enqueue(img, "core");
+      scrollImgs[SCROLL_DEFS[i].id] = img;
+    }
+  })();
+  function scrollById(id) {
+    var i;
+    for (i = 0; i < SCROLL_DEFS.length; i++) if (SCROLL_DEFS[i].id === id) return SCROLL_DEFS[i];
+    return null;
+  }
+  function makeScrollSkill(def, keyLabel) {
+    return {
+      key: keyLabel || "V",
+      name: def.name,
+      role: def.role,
+      cd: 0,
+      max: def.max,
+      cost: def.cost,
+      scroll: true,
+      color: def.color,
+      dmg: def.dmg,
+      iconId: def.id
+    };
+  }
+  var roundIndex = 1;
+  var roundWinsL = 0;
+  var roundWinsR = 0;
+  var roundEndLeft = 0;
+  var matchWinner = null;
+  var paused = false;
+  var simSpeed = 1;
+  var phaseSlow = 0;
+  var hudHidden = false;
+  var hudHits = [];
+  var uiLatch = 0;
+  var screenChangeAt = 0;
+  var flowHint = document.getElementById("flowHint");
+  var charRoster = [
+    { id: "obito", name: "带土", unlocked: true, blurb: "虚化 · 喷火 · 空间" },
+    { id: "pain", name: "佩恩天道", unlocked: true, blurb: "黑棒 · 气盾 · 吸引" },
+    { id: "tanjiro", name: "炭治郎", unlocked: true, blurb: "水之呼吸 · 火之形态" },
+    { id: "lockA", name: "影", unlocked: false, blurb: "即将开放" },
+    { id: "lockB", name: "焰", unlocked: false, blurb: "即将开放" },
+    { id: "lockC", name: "岚", unlocked: false, blurb: "即将开放" }
+  ];
+  var floaters = [];
+  var projectiles = [];
+  var spikes = [];
+  var bursts = [];
+  var ghosts = [];
+  var rings = [];
+  var sparks = [];
+  var wheels = [];
+  var swords = [];
+  var voidSpace = false;
+  var voidT = 0; // pages20: 切空间 lasts at most VOID_DUR seconds
+  var VOID_DUR = 4;
+  var voidUntil = 0; // performance.now() deadline
+  var fightClock = { stamp: 0, accum: 0, limit: 60 };
+  var arenaImg = regImg(new Image(), "arena-wide.png", "core", "core");
+  enqueue(arenaImg, "core");
+  var sharinganImg = regImg(new Image(), "sharingan.png", "core", "core");
+  enqueue(sharinganImg, "core");
+
+  // Bump when sprite PNGs change so browsers/CDN do not serve stale frames.
+  function loadStrip(prefix, count, folder) {
+    if (!folder) folder = "obito";
+    return framesFromStrip(folder, prefix, count);
+  }
+  var obito = {
+    idle: loadStrip("idle", 8),
+    walk: loadStrip("walk", 8),
+    run: loadStrip("run", 8),
+    breath: loadStrip("breath", 8),
+    firebreath: loadStrip("fire", 32, "obito/firebreath"),
+    phase: loadStrip("phase", 8),
+    tele: loadStrip("tele", 8),
+    punch: loadStrip("punch", 8),
+    cloth: loadStrip("cloth", 12, "obito/cloth_float"),
+    knock: loadStrip("knock", 16, "obito/knockdown")
+  };
+  var portraitImgs = {};
+  (function loadPortraits() {
+    var ids = ["obito", "pain", "tanjiro"];
+    var i;
+    for (i = 0; i < ids.length; i++) {
+      var img = regImg(new Image(), "portraits/" + ids[i] + ".png", "core", "core");
+      enqueue(img, "core");
+      portraitImgs[ids[i]] = img;
+    }
+  })();
+  // Body-height match (obito 180px, pain 143px) then both shrunk by the same
+  // 0.72, then another 0.88 (same for both) so they sit smaller on the expanded field.
+  // Foot pads stay in source px and are multiplied by these scales, so the shared
+  // ground line still lines up.
+  var obitoScale = 1.48 * 0.72 * 0.88;
+  var painScale = 180 * obitoScale / 143;
+  // Body frames were rekeyed at 3x. Draw scale is divided so on-screen height
+  // stays the same. painIdleFootPad is still the pre-upscale pad (6); the PNGs
+  // have 18 transparent rows under the idle soles, and 18 * (painScale/3) = 6*painScale.
+  var painFrameScale = 3;
+  var obitoIdleFootPad = 2;
+  var painIdleFootPad = 6;
+  // Per-idle-frame transparent rows under soles (source px). Used to keep feet planted while idle cycles.
+  var obitoIdleFootPads = [2, 2, 2, 2, 2, 2, 2, 2];
+  var painIdleFootPads = [21, 21, 21, 24, 24, 19];
+  var painFootPads = {
+    idle: [21, 21, 21, 24, 24, 19],
+    cloth: [21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21],
+    walk: [18, 20, 18, 18, 19, 20],
+    run: [27, 21, 21, 24, 22, 19],
+    dash: [18, 34, 21, 21, 18, 19],
+    back: [20, 19, 18, 21, 22, 19],
+    combo: [21, 21, 21, 21, 21, 18],
+    kick: [20, 21, 21, 21, 21, 17],
+    rod: [25, 25, 27, 29, 24, 17],
+    push: [18, 19, 17, 17, 18, 18],
+    turn: [18, 17, 23, 23, 19, 23],
+    land: [21, 21, 21, 21, 19, 18],
+    jump: [19, 20, 18, 18, 18, 18]
+  };
+  // Clamp action pads toward idle sole so feet stay planted (ignore sheet float/crop errors).
+  (function clampPainPads() {
+    var ref = 21;
+    var k, i, arr;
+    for (k in painFootPads) {
+      arr = painFootPads[k];
+      for (i = 0; i < arr.length; i++) {
+        if (Math.abs(arr[i] - ref) > 12) arr[i] = ref;
+      }
+    }
+  })();
+  // Drop pain so its feet share obito's ground line (pain has more empty rows under the sandals).
+  var painFootDrop = painIdleFootPad * painScale - obitoIdleFootPad * obitoScale;
+  // Lowest-opaque row gap under each tele frame (source px). Larger than idle means the art floats.
+  var teleFootPad = [3, 4, 6, 11, 8, 9, 7, 4];
+  var pain = {
+    idle: loadStrip("idle", 6, "pain"),
+    walk: loadStrip("walk", 6, "pain"),
+    run: loadStrip("run", 6, "pain"),
+    dash: loadStrip("dash", 6, "pain"),
+    back: loadStrip("back", 6, "pain"),
+    jump: loadStrip("jump", 6, "pain"),
+    land: loadStrip("land", 6, "pain"),
+    turn: loadStrip("turn", 6, "pain"),
+    combo: loadStrip("combo", 6, "pain"),
+    kick: loadStrip("kick", 6, "pain"),
+    rod: loadStrip("rod", 6, "pain"),
+    push: loadStrip("push", 6, "pain"),
+    repulse: loadStrip("repulse", 20, "pain/repulse"),
+    pullCast: loadStrip("cast", 24, "pain/pull"),
+    pullFx: loadStrip("fx", 24, "pain/pull"),
+    cloth: loadStrip("cloth", 12, "pain/cloth_float")
+  };
+  function loadNumbered(folder, count) {
+    return framesNumbered(folder, count);
+  }
+  function tanjiroFormFolder(fire) {
+    return fire ? "tanjiro/fire" : "tanjiro/water";
+  }
+  var tanjiro = {
+    idle: loadNumbered("tanjiro/idle", 8),
+    water: {
+      atk: loadNumbered("tanjiro/water/普攻", 6),
+      water2: loadNumbered("tanjiro/water/二型", 6),
+      water2c: loadNumbered("tanjiro/water/二型_反击斩", 6),
+      water4: loadNumbered("tanjiro/water/四型", 6),
+      water1: loadNumbered("tanjiro/water/一型", 6)
+    },
+    fire: {
+      atk: loadNumbered("tanjiro/fire/普攻", 6),
+      water2: loadNumbered("tanjiro/fire/二型", 6),
+      water2c: loadNumbered("tanjiro/fire/二型_反击斩", 6),
+      water4: loadNumbered("tanjiro/fire/四型", 6),
+      water1: loadNumbered("tanjiro/fire/一型", 6)
+    },
+    ult1: loadNumbered("tanjiro/ult/一段_变身", 6),
+    ult2: loadNumbered("tanjiro/ult/二段", 6)
+  };
+  // Match on-screen body height to Obito (~180 * obitoScale). Source foot line y=380 on 400 canvas.
+  var tanjiroScale = (180 * obitoScale) / 360;
+  var tanjiroFootPad = 20; // empty rows under soles
+  var tanjiroBodyW = 211 * tanjiroScale;
+  var tanjiroBodyH = 360 * tanjiroScale;
+
+  var clothFps = 9;
+  function plantCaster(f) {
+    f.airH = 0;
+    f.airV = 0;
+    f.airborne = false;
+    f.launchVx = 0;
+    f.launchVy = 0;
+  }
+  // Repulsion sheet: frames 1-12 are F05-F16, 13-20 are F17-F24. Play once, no loop.
+  // 16 fps (was 12) shortens the wind-up; short press still ends on F16, long on F24.
+  var repulseFps = 16;
+  // Startup before the shield is live, scaled with the fps change (0.15 * 12 / 16).
+  var repulseWind = 0.15 * 12 / repulseFps;
+  // Standing head-to-sole on this sheet is 171px; idle opaque span is 149px.
+  var repulseScale = painScale * (149 / 171);
+  // Source px from the sandal sole up from the bottom of every repulse frame.
+  var repulseFootPad = 53;
+  function repulseSpan(long) {
+    return (long ? 20 : 12) / repulseFps;
+  }
+  // Pull (吸力) cast + black-core VFX: 24 frames synced by index.
+  var pullCastFps = 18;
+  var pullCastSpan = 24 / pullCastFps;
+  var pullCastScale = painScale * (433 / 3) / 532;
+  var pullCastFootPad = 6;
+  var pullFxScale = 1.15;
+  var pullActiveFrom = 8 / pullCastFps;
+  var pullActiveUntil = 17 / pullCastFps;
+
+  function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+
+  function xLimits(y) {
+    var span = MAX_Y - MIN_Y;
+    var t = span === 0 ? 0 : (y - MIN_Y) / span;
+    if (t < 0) t = 0;
+    if (t > 1) t = 1;
+    return {
+      min: FAR_L + (NEAR_L - FAR_L) * t,
+      max: FAR_R + (NEAR_R - FAR_R) * t
+    };
+  }
+
+  function clampSpot(x, y) {
+    // Void space only swaps the backdrop. Keep the same playable plane so Pain
+    // (and Obito) can still walk/fight after 切空间. The old 500–650 Y band
+    // pinned fighters and felt like a hard freeze.
+    return { x: clamp(x, 90, 1190), y: clamp(y, 430, 680) };
+  }
+
+  function boosted(f, amount) {
+    if (voidSpace && isObito(f)) return Math.round(amount * 1.5);
+    return amount;
+  }
+  function lerp(a, b, t) { return a + (b - a) * t; }
+
+  function makeFighter(id, name, x, palette) {
+    return {
+      id: id,
+      name: name,
+      x: x,
+      y: 530,
+      facing: id === "L" ? 1 : -1,
+      hp: 120,
+      maxHp: 120,
+      chakra: 100,
+      maxChakra: 100,
+      palette: palette,
+      weapon: id === "L" ? "blade" : "spear",
+      anim: "idle",
+      gait: "idle",
+      animT: 0,
+      animDur: 0.3,
+      busy: 0,
+      hitPending: false,
+      dashT: 0,
+      dashVx: 0,
+      dashHit: false,
+      flash: 0,
+      invuln: 0,
+      hurt: 0,
+      stun: 0,
+      airH: 0,
+      airV: 0,
+      launchVx: 0,
+      launchVy: 0,
+      airborne: false,
+      hitLean: 0,
+      hitLeanDir: 1,
+      hitPushVx: 0,
+      hitPushVy: 0,
+      hitShake: 0,
+      hitLight: false,
+      downT: 0,
+      downMax: 0,
+      getUpT: 0,
+      getUpMax: 0,
+      knockPhase: null,
+      knockT: 0,
+      hpChip: 100,
+      barDmg: 0,
+      barDmgT: 0,
+      phase: 0,
+      armor: 0,
+      hyperArmor: 0,
+      chakraLock: 0,
+      aiIx: 0,
+      aiIy: 0,
+      aiThink: 0,
+      skills: {}
+    };
+  }
+
+  var left = makeFighter("L", "带土", 420, {
+    body: "#24315c",
+    trim: "#e8e4f2",
+    glow: "#9eb6ff",
+    deep: "#14182c",
+    hot: "#f0d2c0"
+  });
+  var right = makeFighter("R", "佩恩天道", 860, {
+    body: "#2c2428",
+    trim: "#ff7a3a",
+    glow: "#ffb067",
+    deep: "#1a1214",
+    hot: "#ff8a3a"
+  });
+  left.kit = "obito";
+  right.kit = "pain";
+  left.moveSpeed = 546;
+  right.moveSpeed = 437;
+
+  left.skills = {
+    punch: { key: "Q", name: "掌击", role: "突进", cd: 0, max: 0.91, cost: 0 },
+    phase: { key: "E", name: "虚化", role: "灵体", cd: 0, max: 7.8, cost: 30 },
+    tele: { key: "R", name: "传送", role: "突进", cd: 0, max: 1.495, cost: 16 },
+    breath: { key: "F", name: "喷火", role: "远程", cd: 0, max: 2.21, cost: 22 },
+    space: { key: "C", name: "切空间", role: "空间", cd: 0, max: 0, cost: 0 }
+  };
+  right.skills = {
+    thrust: { key: "U", name: "连击", role: "平A", cd: 0, max: 1.014, cost: 0 },
+    fire: { key: "I", name: "黑棒", role: "远程", cd: 0, max: 1.495, cost: 18 },
+    swap: { key: "O", name: "后撤", role: "闪避", cd: 0, max: 1.56, cost: 10 },
+    spike: { key: "P", name: "气盾", role: "绝技", cd: 0, max: 10.4, cost: 28 },
+    pull: { key: "J", name: "吸引", role: "控制", cd: 0, max: 3.38, cost: 18 },
+    cleave: { key: "K", name: "重脚", role: "平A", cd: 0, max: 1.17, cost: 8 }
+  };
+
+
+  // Coop 2v2 partners (inactive unless gameMode === "coop")
+  var left2 = makeFighter("L2", "带土", 460, {
+    body: "#24315c",
+    trim: "#e8e4f2",
+    glow: "#9eb6ff",
+    deep: "#14182c",
+    hot: "#f0d2c0"
+  });
+  var right2 = makeFighter("R2", "佩恩天道", 940, {
+    body: "#2c2428",
+    trim: "#ff7a3a",
+    glow: "#ffb067",
+    deep: "#1a1214",
+    hot: "#ff8a3a"
+  });
+  left2.kit = "obito";
+  right2.kit = "pain";
+  left2.moveSpeed = 546;
+  right2.moveSpeed = 437;
+  left2.skills = {};
+  right2.skills = {};
+
+  var leftOrder = ["punch", "phase", "tele", "breath", "space"];
+  var rightOrder = ["thrust", "fire", "swap", "spike", "pull", "cleave"];
+  var left2Order = ["punch", "phase", "tele", "breath", "space"];
+  var right2Order = ["thrust", "fire", "swap", "spike", "pull", "cleave"];
+
+  var KIT_DEFS = {
+    obito: {
+      name: "带土",
+      weapon: "blade",
+      speed: 546,
+      palette: { body: "#24315c", trim: "#e8e4f2", glow: "#9eb6ff", deep: "#14182c", hot: "#f0d2c0" },
+      order: ["punch", "phase", "tele", "breath", "space"],
+      skills: {
+        punch: { key: "Q", name: "掌击", role: "突进", cd: 0, max: 0.91, cost: 0 },
+        phase: { key: "E", name: "虚化", role: "灵体", cd: 0, max: 7.8, cost: 30 },
+        tele: { key: "R", name: "传送", role: "突进", cd: 0, max: 1.495, cost: 16 },
+        breath: { key: "F", name: "喷火", role: "远程", cd: 0, max: 2.21, cost: 22 },
+        space: { key: "C", name: "切空间", role: "空间", cd: 0, max: 0, cost: 0 }
+      }
+    },
+    pain: {
+      name: "佩恩天道",
+      weapon: "spear",
+      speed: 437,
+      palette: { body: "#2c2428", trim: "#ff7a3a", glow: "#ffb067", deep: "#1a1214", hot: "#ff8a3a" },
+      order: ["thrust", "fire", "swap", "spike", "pull", "cleave"],
+      skills: {
+        thrust: { key: "U", name: "连击", role: "平A", cd: 0, max: 1.014, cost: 0 },
+        fire: { key: "I", name: "黑棒", role: "远程", cd: 0, max: 1.495, cost: 18 },
+        swap: { key: "O", name: "后撤", role: "闪避", cd: 0, max: 1.56, cost: 10 },
+        spike: { key: "P", name: "气盾", role: "绝技", cd: 0, max: 10.4, cost: 28 },
+        pull: { key: "J", name: "吸引", role: "控制", cd: 0, max: 3.38, cost: 18 },
+        cleave: { key: "K", name: "重脚", role: "平A", cd: 0, max: 1.17, cost: 8 }
+      }
+    },
+    tanjiro: {
+      name: "炭治郎",
+      weapon: "blade",
+      speed: 480,
+      palette: { body: "#1e4a52", trim: "#7ad0c8", glow: "#5ee0d0", deep: "#0c1c22", hot: "#ff6a3a" },
+      order: ["atk", "water2", "water4", "water1", "ult1", "ult2"],
+      skills: {
+        atk: { key: "Q", name: "普攻", role: "平A", cd: 0, max: 0.35, cost: 0 },
+        water2: { key: "E", name: "二型", role: "防御", cd: 0, max: 8, cost: 25 },
+        water4: { key: "R", name: "四型", role: "突进", cd: 0, max: 6, cost: 20 },
+        water1: { key: "F", name: "一型", role: "斩击", cd: 0, max: 7, cost: 22 },
+        ult1: { key: "C", name: "火之形态", role: "变身", cd: 0, max: 20, cost: 0 },
+        ult2: { key: "V", name: "瞬斩", role: "大招", cd: 0, max: 0, cost: 0 }
+      }
+    }
+  };
+
+  function cloneSkills(src) {
+    var out = {};
+    var k;
+    for (k in src) {
+      out[k] = {
+        key: src[k].key,
+        name: src[k].name,
+        role: src[k].role,
+        cd: 0,
+        max: src[k].max,
+        cost: src[k].cost
+      };
+    }
+    return out;
+  }
+
+  function applySideKit(f, kitId) {
+    var def = KIT_DEFS[kitId];
+    if (!def) return;
+    f.kit = kitId;
+    f.name = def.name;
+    f.weapon = def.weapon;
+    f.palette = {
+      body: def.palette.body,
+      trim: def.palette.trim,
+      glow: def.palette.glow,
+      deep: def.palette.deep,
+      hot: def.palette.hot
+    };
+    f.skills = cloneSkills(def.skills);
+    f.moveSpeed = def.speed;
+    // Pain-only fields stay harmless on Obito
+    if (kitId === "pain") {
+      f.shield = f.shield || 0;
+      f.shieldKey = false;
+      f.shieldHit = false;
+      f.repulseOn = false;
+      f.repulseT = 0;
+      f.repulseLong = false;
+      f.pullOn = false;
+      f.pullAnimT = 0;
+      f.pullApplied = false;
+    }
+    f.baseMoveSpeed = def.speed;
+    f.fireForm = false;
+    f.barrierT = 0;
+    f.barrierUsed = false;
+    f.counterT = 0;
+    f.ult2Phase = 0;
+    f.ult2T = 0;
+    f.ult2Hits = 0;
+  }
+
+  // pages20: fixed slots on both sides. Non-scroll skills fill slots 0..5 in order;
+  // the 密卷 always sits on slot 6 (left B / right L) for every kit.
+  var SLOT_LABELS = { L: ["Q", "E", "R", "F", "C", "V", "B"], R: ["U", "I", "O", "P", "J", "K", "L"] };
+  function slotIndexFor(order, i) {
+    if (String(order[i]).indexOf("scroll_") === 0) return 6;
+    var n = 0, j;
+    for (j = 0; j < i; j++) if (String(order[j]).indexOf("scroll_") !== 0) n++;
+    return n;
+  }
+  function labelSide(f, order, side) {
+    var i;
+    for (i = 0; i < order.length; i++) {
+      if (f.skills[order[i]]) f.skills[order[i]].key = SLOT_LABELS[side][slotIndexFor(order, i)];
+    }
+  }
+
+  function rebuildControlMap() {
+    var leftKeys = ["q", "e", "r", "f", "c", "v", "b"];
+    var rightKeys = ["u", "i", "o", "p", "j", "k", "l"];
+    var map = {};
+    var i;
+    var p2 = isCoop() ? left2 : right;
+    var p2Order = isCoop() ? left2Order : rightOrder;
+    var p2Id = isCoop() ? "L2" : "R";
+    for (i = 0; i < leftOrder.length; i++) map[leftKeys[slotIndexFor(leftOrder, i)]] = ["L", leftOrder[i]];
+    labelSide(left, leftOrder, "L");
+    for (i = 0; i < p2Order.length; i++) map[rightKeys[slotIndexFor(p2Order, i)]] = [p2Id, p2Order[i]];
+    labelSide(p2, p2Order, "R");
+    if (isCoop()) {
+      labelSide(right, rightOrder, "R");
+      labelSide(right2, right2Order, "R");
+    }
+    controlMap = map;
+  }
+
+  function attachScrollSkill(f, orderArr, scrollId, keyLabel) {
+    var def = scrollById(scrollId);
+    if (!def) return orderArr;
+    // Drop any previous scroll skill ids from order/skills
+    var cleaned = [];
+    var i, sid;
+    for (i = 0; i < orderArr.length; i++) {
+      sid = orderArr[i];
+      if (sid.indexOf("scroll_") === 0) {
+        delete f.skills[sid];
+      } else {
+        cleaned.push(sid);
+      }
+    }
+    f.skills[def.id] = makeScrollSkill(def, keyLabel);
+    cleaned.push(def.id);
+    f.scrollId = def.id;
+    return cleaned;
+  }
+
+  function pickAiScroll(avoidId) {
+    var pool = [];
+    var i;
+    for (i = 0; i < SCROLL_DEFS.length; i++) {
+      if (SCROLL_DEFS[i].id !== avoidId) pool.push(SCROLL_DEFS[i].id);
+    }
+    if (!pool.length) return SCROLL_DEFS[0].id;
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+
+  function applyMatchKits(kitL, kitR, scrollL, scrollR) {
+    applySideKit(left, kitL || "obito");
+    applySideKit(right, kitR || "pain");
+    leftOrder = KIT_DEFS[left.kit].order.slice();
+    rightOrder = KIT_DEFS[right.kit].order.slice();
+    leftOrder = attachScrollSkill(left, leftOrder, scrollL, "B");
+    rightOrder = attachScrollSkill(right, rightOrder, scrollR, "L");
+    rebuildControlMap();
+  }
+
+  function applyCoopMatchKits(kitP1, kitP2, kitA1, kitA2, scrollP1, scrollP2, scrollA1, scrollA2) {
+    applySideKit(left, kitP1 || "obito");
+    applySideKit(left2, kitP2 || "pain");
+    applySideKit(right, kitA1 || "pain");
+    applySideKit(right2, kitA2 || "obito");
+    leftOrder = KIT_DEFS[left.kit].order.slice();
+    left2Order = KIT_DEFS[left2.kit].order.slice();
+    rightOrder = KIT_DEFS[right.kit].order.slice();
+    right2Order = KIT_DEFS[right2.kit].order.slice();
+    leftOrder = attachScrollSkill(left, leftOrder, scrollP1, "B");
+    left2Order = attachScrollSkill(left2, left2Order, scrollP2, "L");
+    rightOrder = attachScrollSkill(right, rightOrder, scrollA1, "L");
+    right2Order = attachScrollSkill(right2, right2Order, scrollA2, "L");
+    rebuildControlMap();
+  }
+
+  function fighterByKit(kitId) {
+    var all = activeFighters();
+    var i;
+    for (i = 0; i < all.length; i++) if (all[i].kit === kitId) return all[i];
+    return null;
+  }
+
+  function isObito(f) { return f && f.kit === "obito"; }
+  function isPain(f) { return f && f.kit === "pain"; }
+  function isTanjiro(f) { return f && f.kit === "tanjiro"; }
+
+  function isCoop() { return gameMode === "coop"; }
+
+  function activeFighters() {
+    if (isCoop()) return [left, left2, right, right2];
+    return [left, right];
+  }
+
+  function teamOf(f) {
+    if (!f) return null;
+    if (f.id === "L" || f.id === "L2") return "L";
+    return "R";
+  }
+
+  function fighterByOwner(id) {
+    if (id === "L") return left;
+    if (id === "R") return right;
+    if (id === "L2") return left2;
+    if (id === "R2") return right2;
+    return null;
+  }
+
+  function livingEnemies(f) {
+    var t = teamOf(f);
+    var all = activeFighters();
+    var out = [];
+    var i;
+    for (i = 0; i < all.length; i++) {
+      if (teamOf(all[i]) !== t && all[i].hp > 0) out.push(all[i]);
+    }
+    return out;
+  }
+
+  function nearestEnemy(f) {
+    var enemies = livingEnemies(f);
+    var i;
+    if (!enemies.length) {
+      var all = activeFighters();
+      for (i = 0; i < all.length; i++) {
+        if (teamOf(all[i]) !== teamOf(f)) enemies.push(all[i]);
+      }
+    }
+    if (!enemies.length) return f === left ? right : left;
+    var best = enemies[0];
+    var bestD = 1e12;
+    for (i = 0; i < enemies.length; i++) {
+      var dx = enemies[i].x - f.x;
+      var dy = enemies[i].y - f.y;
+      var d = dx * dx + dy * dy;
+      if (d < bestD) { bestD = d; best = enemies[i]; }
+    }
+    return best;
+  }
+
+  function other(f) { return nearestEnemy(f); }
+
+  function livingHumans() {
+    var all = activeFighters();
+    var out = [];
+    var i;
+    for (i = 0; i < all.length; i++) {
+      if (humanControls(all[i]) && all[i].hp > 0) out.push(all[i]);
+    }
+    return out;
+  }
+
+  function nearestHuman(f) {
+    var humans = livingHumans();
+    var i;
+    if (!humans.length) return nearestEnemy(f);
+    var best = humans[0];
+    var bestD = 1e12;
+    for (i = 0; i < humans.length; i++) {
+      var dx = humans[i].x - f.x;
+      var dy = humans[i].y - f.y;
+      var d = dx * dx + dy * dy;
+      if (d < bestD) { bestD = d; best = humans[i]; }
+    }
+    return best;
+  }
+
+  function projectileOwner(ownerId) {
+    return fighterByOwner(ownerId) || left;
+  }
+
+  function projectileFoe(ownerId, px, py) {
+    var owner = projectileOwner(ownerId);
+    var enemies = livingEnemies(owner);
+    var i;
+    if (!enemies.length) return nearestEnemy(owner);
+    if (px == null) return nearestEnemy(owner);
+    var best = enemies[0];
+    var bestD = 1e12;
+    for (i = 0; i < enemies.length; i++) {
+      var dx = enemies[i].x - px;
+      var dy = (enemies[i].y - 74) - py;
+      var d = dx * dx + dy * dy;
+      if (d < bestD) { bestD = d; best = enemies[i]; }
+    }
+    return best;
+  }
+
+  function teamAlive(side) {
+    var all = activeFighters();
+    var i;
+    for (i = 0; i < all.length; i++) {
+      if (teamOf(all[i]) === side && all[i].hp > 0) return true;
+    }
+    return false;
+  }
+
+  function teamHp(side) {
+    var all = activeFighters();
+    var sum = 0;
+    var i;
+    for (i = 0; i < all.length; i++) {
+      if (teamOf(all[i]) === side) sum += Math.max(0, all[i].hp);
+    }
+    return sum;
+  }
+
+  function declareKoWinner(winnerSide) {
+    koId = winnerSide;
+    finishRound(winnerSide);
+  }
+
+  function onFighterKilled(target) {
+    if (isCoop()) {
+      var deadTeam = teamOf(target);
+      if (!teamAlive(deadTeam)) declareKoWinner(deadTeam === "L" ? "R" : "L");
+      return;
+    }
+    declareKoWinner(target.id === "L" ? "R" : "L");
+  }
+
+  function unlockedKitIds() {
+    var ids = [];
+    var i;
+    for (i = 0; i < charRoster.length; i++) {
+      if (charRoster[i].unlocked) ids.push(charRoster[i].id);
+    }
+    return ids.length ? ids : ["obito", "pain"];
+  }
+
+  function pickRandomKit() {
+    var ids = unlockedKitIds();
+    return ids[Math.floor(Math.random() * ids.length)];
+  }
+
+  function resetOneFighter(f, facing) {
+    f.facing = facing;
+    f.hp = f.maxHp;
+    f.chakra = f.maxChakra;
+    f.anim = "idle";
+    f.busy = 0;
+    f.dashT = 0;
+    f.flash = 0;
+    f.invuln = 0;
+    f.phase = 0;
+    f.hurt = 0;
+    f.stun = 0;
+    f.airH = 0;
+    f.airV = 0;
+    f.launchVx = 0;
+    f.launchVy = 0;
+    f.airborne = false;
+    f.hitLean = 0;
+    f.hitLeanDir = facing;
+    f.hitPushVx = 0;
+    f.hitPushVy = 0;
+    f.hitShake = 0;
+    f.hitLight = false;
+    f.downT = 0;
+    f.downMax = 0;
+    f.getUpT = 0;
+    f.getUpMax = 0;
+    f.knockPhase = null;
+    f.knockT = 0;
+    f.hpChip = f.maxHp;
+    f.barDmg = 0;
+    f.barDmgT = 0;
+    f.hitPending = false;
+    f.aiIx = 0;
+    f.aiIy = 0;
+    f.aiThink = 0;
+    var k;
+    for (k in f.skills) f.skills[k].cd = 0;
+    f.shield = 0;
+    f.shieldKey = false;
+    f.shieldHit = false;
+    f.armor = 0;
+    f.hyperArmor = 0;
+    f.chakraLock = 0;
+    f.rooted = 0;
+    f.pullT = 0;
+    f.pullFx = 0;
+    f.pullOn = false;
+    f.pullAnimT = 0;
+    f.pullApplied = false;
+    f.shieldWind = 0;
+    f.repulseOn = false;
+    f.repulseT = 0;
+    f.repulseLong = false;
+    f.fireForm = false;
+    f.pendingFireForm = false;
+    f.barrierT = 0;
+    f.barrierUsed = false;
+    f.counterT = 0;
+    f.ult2Phase = 0;
+    f.ult2T = 0;
+    f.ult2Hits = 0;
+    if (f.baseMoveSpeed) f.moveSpeed = f.baseMoveSpeed;
+  }
+
+  function reset() {
+    if (isCoop()) {
+      left.x = 340; left.y = 500;
+      left2.x = 460; left2.y = 560;
+      right.x = 820; right.y = 500;
+      right2.x = 940; right2.y = 560;
+      resetOneFighter(left, 1);
+      resetOneFighter(left2, 1);
+      resetOneFighter(right, -1);
+      resetOneFighter(right2, -1);
+    } else {
+      left.x = 420; left.y = 530;
+      right.x = 860; right.y = 530;
+      resetOneFighter(left, 1);
+      resetOneFighter(right, -1);
+    }
+    projectiles.length = 0;
+    spikes.length = 0;
+    bursts.length = 0;
+    ghosts.length = 0;
+    rings.length = 0;
+    sparks.length = 0;
+    wheels.length = 0;
+    swords.length = 0;
+    floaters.length = 0;
+    shake = 0;
+    koId = null;
+    voidSpace = false;
+    voidT = 0;
+    voidUntil = 0;
+    phaseSlow = 0;
+  }
+
+  function spawnFloater(x, y, text, color) {
+    floaters.push({ x: x, y: y, text: text, color: color, life: 0.75, max: 0.75 });
+  }
+
+  var LAUNCH_DMG = 12;
+  var LAUNCH_G = 980;
+  var IMPACT_K = 0.022;
+
+  function isAirborne(f) {
+    return !!(f && (f.airborne || (f.airH || 0) > 0.5));
+  }
+
+  function isDowned(f) {
+    return !!(f && ((f.downT || 0) > 0 || (f.getUpT || 0) > 0));
+  }
+
+  function fighterDrawTilt(f) {
+    // World-space lean: positive rotates so the head moves right (canvas y-down).
+    var dir = f.hitLeanDir || 1;
+    var local;
+    var flat = Math.PI * 0.40; // ~72°, not a hard 90° snap
+    if ((f.downT || 0) > 0) {
+      var dMax = f.downMax || f.downT || 0.01;
+      var held = 1 - (f.downT / dMax);
+      if (held < 0) held = 0;
+      if (held > 1) held = 1;
+      // Ease into the lie: start from air tilt, settle flat (no instant 90°).
+      var u = held < 0.35 ? (held / 0.35) : 1;
+      u = u * u * (3 - 2 * u);
+      local = flat * (0.78 + 0.22 * u);
+    } else if ((f.getUpT || 0) > 0 && (f.getUpMax || 0) > 0) {
+      var t = f.getUpT / f.getUpMax; // 1=flat → 0=upright
+      // Ease-out stand: leave the floor sooner, finish smoothly.
+      var eased = Math.pow(t, 1.55);
+      local = flat * eased;
+    } else if (isAirborne(f)) {
+      var hNorm = (f.airH || 0) / 180;
+      if (hNorm < 0) hNorm = 0;
+      if (hNorm > 1) hNorm = 1;
+      var rising = (f.airV || 0) > 40;
+      if (rising) local = 0.22 + hNorm * 0.48;
+      else local = 0.30 + hNorm * 0.62;
+    } else if ((f.hitLean || 0) > 0.001) {
+      local = f.hitLean;
+    } else {
+      return 0;
+    }
+    return dir * local;
+  }
+
+  function hurt(target, amount, color, opts) {
+    opts = opts || {};
+    if (koId || target.hp <= 0 || target.invuln > 0 || target.phase > 0 || target.shield > 0) return false;
+    if (isDowned(target) && !opts.fromImpact) return false;
+    amount = Math.max(1, Math.round(amount * 2 / 3));
+    var hyper = (target.hyperArmor || 0) > 0 && !opts.ignoreArmor;
+    target.hp = Math.max(0, target.hp - amount);
+    target.flash = 0;
+    target.hurt = 0.14;
+    target.hpChip = Math.min(target.maxHp, Math.max(target.hpChip != null ? target.hpChip : target.maxHp, target.hp + amount));
+    target.chipHold = 0.5;
+    target.barDmg = amount;
+    target.barDmgT = 0.85;
+    shake = Math.min(14, shake + 4.5 + Math.min(4, amount * 0.12));
+    spawnFloater(target.x + (Math.random() * 16 - 8), target.y - 148 - (target.airH || 0), String(amount), color);
+    if (hyper) {
+      // 霸体: take damage, keep acting; immune to stun / knockback / launch from normal hits.
+      // Grab/pull still moves the target via castPull (does not rely on hurt launch).
+      spawnFloater(target.x + (Math.random() * 10 - 5), target.y - 178 - (target.airH || 0), "霸体", "#e07030");
+      if (isTanjiro(target) && (target.barrierT || 0) > 0 && !target.barrierUsed) {
+        var atkH = opts.attacker || other(target);
+        triggerTanjiroCounter(target, atkH);
+      }
+      if (target.hp <= 0) onFighterKilled(target);
+      return true;
+    }
+    var stunDur = 0.08 + amount * 0.035;
+    if (stunDur > 0.85) stunDur = 0.85;
+    target.stun = Math.max(target.stun || 0, stunDur);
+    target.busy = 0;
+    target.dashT = 0;
+    target.anim = "idle";
+    target.hitPending = false;
+    target.hitPending2 = false;
+    target.teleBlinked = false;
+    if (!opts.noLaunch) {
+      spawnFloater(target.x + (Math.random() * 10 - 5), target.y - 178 - (target.airH || 0), "僵直", "#ffe7a0");
+    }
+    // Hit flash / sparkle removed; damage numbers kept via floaters.
+    var i;
+    if (!opts.noLaunch) {
+      var atk = other(target);
+      var dx = target.x - atk.x;
+      var dy = target.y - atk.y;
+      var len = Math.sqrt(dx * dx + dy * dy) || 1;
+      var nx = dx / len;
+      var ny = dy / len;
+      var hitDir = nx >= 0 ? 1 : -1;
+      target.hitLeanDir = hitDir;
+      if (amount >= LAUNCH_DMG) {
+        // Heavy: launch arc. Higher damage → faster and farther.
+        var hSpd = 140 + amount * 22;
+        target.launchVx = nx * hSpd;
+        target.launchVy = ny * hSpd * 0.55;
+        target.airV = 260 + amount * 20;
+        target.airH = Math.max(target.airH || 0, 16);
+        target.airborne = true;
+        target.invuln = Math.max(target.invuln || 0, 8);
+        target.hitLean = 0;
+        target.hitLight = false;
+        target.hitPushVx = 0;
+        target.hitPushVy = 0;
+        target.downT = 0;
+        target.getUpT = 0;
+        target.knockPhase = "air";
+        target.knockT = 0;
+        spawnFloater(target.x, target.y - 200, "击飞", "#ffd0a0");
+      } else {
+        // Light: grounded lean-back stagger, small slide, no vertical launch.
+        var leanAdd = (10 + amount * 0.65) * Math.PI / 180;
+        var leanCap = 18 * Math.PI / 180;
+        target.hitLean = Math.min(leanCap, Math.max(target.hitLean || 0, leanAdd) + leanAdd * 0.35);
+        // pages21: knockback tiers. Slide distance ≈ v0 / 9 px.
+        // light ≈ 25px · mid (≥6 dmg) ≈ 60px · heavy (Pain K 重脚 / opts.heavy) ≈ 125px.
+        var atkT = opts.attacker || atk;
+        var tierV = 225;
+        if (opts.heavy || (atkT && atkT.anim === "kick")) tierV = 1125;
+        else if (amount >= 6) tierV = 540;
+        target.hitPushVx = hitDir * tierV;
+        target.hitTier = tierV;
+        target.hitPushVy = (Math.random() * 2 - 1) * 8;
+        target.hitShake = 0.16;
+        target.hitLight = true;
+        target.airborne = false;
+        target.airH = 0;
+        target.airV = 0;
+        target.launchVx = 0;
+        target.launchVy = 0;
+      }
+    }
+    if (target.hp <= 0) onFighterKilled(target);
+    return true;
+  }
+
+  function landFighter(f) {
+    var impactVy = Math.abs(f.airV || 0);
+    f.airH = 0;
+    f.airV = 0;
+    f.launchVx = 0;
+    f.launchVy = 0;
+    f.airborne = false;
+    f.invuln = 0;
+    var impactDmg = Math.round(IMPACT_K * impactVy);
+    if (impactDmg < 2) impactDmg = 2;
+    if (impactDmg > 15) impactDmg = 15;
+    shake = Math.min(16, shake + 3 + impactDmg * 0.2);
+    bursts.push({
+      x: f.x,
+      y: f.y - 20,
+      life: 0.36,
+      max: 0.36,
+      kind: "impact",
+      facing: 1,
+      scale: 1.6 + impactDmg * 0.06
+    });
+    rings.push({ x: f.x, y: f.y, life: 0.35, max: 0.35, color: "#e8dcc0" });
+    f.knockPhase = "down";
+    f.knockT = 0;
+    hurt(f, impactDmg, "#ffe7a0", { noLaunch: true, fromImpact: true });
+    spawnFloater(f.x, f.y - 160, "落地 " + impactDmg, "#ffc878");
+    // Knockdown: shorter hard-flat, smoother get-up. Invulnerable through both.
+    f.downT = 0.40;
+    f.downMax = 0.40;
+    f.getUpT = 0;
+    f.getUpMax = 0;
+    f.hitLean = Math.PI * 0.40;
+    f.hitLight = false;
+    f.hitPushVx = 0;
+    f.hitPushVy = 0;
+    f.stun = Math.max(f.stun || 0, 0.40 + 0.52);
+    f.invuln = Math.max(f.invuln || 0, 0.40 + 0.52);
+    f.gait = "idle";
+    f.anim = "idle";
+  }
+
+  function syncFlowHint() {
+    if (!flowHint) return;
+    if (matchState === "intro") {
+      flowHint.style.display = "block";
+      flowHint.textContent = "点击 / 按任意键继续";
+    } else {
+      flowHint.style.display = "none";
+    }
+  }
+
+  function goIntro() {
+    matchState = "intro"; screenChangeAt = performance.now();
+    paused = false;
+    syncFlowHint();
+  }
+
+  function goMode() {
+    matchState = "mode"; screenChangeAt = performance.now();
+    paused = false;
+    syncFlowHint();
+  }
+
+  function goCharSelect() {
+    matchState = "charSelect"; screenChangeAt = performance.now();
+    paused = false;
+    if (gameMode === "vs" || gameMode === "coop") {
+      selectedL = null;
+      selectedR = null;
+      selectedScrollL = null;
+      selectedScrollR = null;
+      vsAssignSide = "L";
+    } else {
+      selectedChar = selectedChar || "obito";
+      selectedScroll = selectedScroll || null;
+    }
+    syncFlowHint();
+  }
+
+  function applyPlayerPick(charId) {
+    selectedChar = charId;
+    if (charId === "pain") playerSide = "R";
+    else playerSide = "L";
+  }
+
+  function vsCanConfirm() {
+    return !!(selectedL && selectedR && selectedL !== selectedR);
+  }
+
+  function pickVsCard(charId) {
+    var c = null;
+    var i;
+    for (i = 0; i < charRoster.length; i++) {
+      if (charRoster[i].id === charId) c = charRoster[i];
+    }
+    if (!c || !c.unlocked) return;
+    // One-click fill: empty LEFT first, then empty RIGHT. Distinct only.
+    // If both filled, replace the focused side (click a box to focus). Optional slot-tap still works.
+    if (!selectedL) {
+      if (selectedR === charId) return;
+      selectedL = charId;
+      vsAssignSide = selectedR ? "L" : "R";
+      return;
+    }
+    if (!selectedR) {
+      if (selectedL === charId) return;
+      selectedR = charId;
+      vsAssignSide = "L";
+      return;
+    }
+    if (vsAssignSide === "L") {
+      if (selectedR === charId) return;
+      selectedL = charId;
+    } else {
+      if (selectedL === charId) return;
+      selectedR = charId;
+    }
+  }
+
+  function beginMatch() {
+    roundIndex = 1;
+    roundWinsL = 0;
+    roundWinsR = 0;
+    matchWinner = null;
+    matchResult = null;
+    if (gameMode === "coop") {
+      playerSide = "L";
+      coopAiKits = [pickRandomKit(), pickRandomKit()];
+      var scrollP1 = selectedScrollL || SCROLL_DEFS[0].id;
+      var scrollP2 = selectedScrollR || SCROLL_DEFS[1].id;
+      applyCoopMatchKits(
+        selectedL || "obito",
+        selectedR || "pain",
+        coopAiKits[0],
+        coopAiKits[1],
+        scrollP1,
+        scrollP2,
+        pickAiScroll(scrollP1),
+        pickAiScroll(scrollP2)
+      );
+    } else if (gameMode === "vs") {
+      playerSide = "L"; // both human; sticks stay L/R
+      applyMatchKits(
+        selectedL || "obito",
+        selectedR || "pain",
+        selectedScrollL || SCROLL_DEFS[0].id,
+        selectedScrollR || SCROLL_DEFS[1].id
+      );
+    } else {
+      // Solo / practice: player picks one unlocked kit; AI gets another unlocked kit.
+      var humanKit = selectedChar || "obito";
+      var unlocked = unlockedKitIds();
+      var aiPool = [];
+      var ui;
+      for (ui = 0; ui < unlocked.length; ui++) if (unlocked[ui] !== humanKit) aiPool.push(unlocked[ui]);
+      var aiKit = aiPool.length ? aiPool[Math.floor(Math.random() * aiPool.length)] : "pain";
+      if (window.__DUEL_AIKIT__ && window.__DUEL_AIKIT__ !== humanKit) aiKit = window.__DUEL_AIKIT__;
+      var humanScroll = selectedScroll || SCROLL_DEFS[0].id;
+      var aiScroll = pickAiScroll(humanScroll);
+      if (humanKit === "pain") {
+        playerSide = "R";
+        applyMatchKits(aiKit, humanKit, aiScroll, humanScroll);
+      } else {
+        playerSide = "L";
+        applyMatchKits(humanKit, aiKit, humanScroll, aiScroll);
+      }
+    }
+    startAfterLoad();
+  }
+
+  var loadKits = [];
+  var loadT = 0;
+  function startAfterLoad() {
+    var fs = activeFighters();
+    var i;
+    loadKits = [];
+    for (i = 0; i < fs.length; i++) if (fs[i].kit && loadKits.indexOf(fs[i].kit) < 0) loadKits.push(fs[i].kit);
+    // Register atlas images for the kits in this match, then load exclusively.
+    for (i = 0; i < loadKits.length; i++) registerKitSheets(loadKits[i]);
+    loadMode = "match";
+    matchStall = false;
+    matchLoadStartedAt = performance.now();
+    noteProgress();
+    ensureGroups(loadKits.concat(["core"]), "match");
+    loadT = 0;
+    var pr = groupProgress(loadKits.concat(["core"]));
+    if (sheetManifest && pr.done >= pr.tot && pr.err === 0) { loadMode = "idle"; beginCountdown(); return; }
+    matchState = "loading";
+    syncFlowHint();
+  }
+  function drawLoading() {
+    hudHits = [];
+    var pr = groupProgress(loadKits.concat(["core"]));
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = "#0c0d14";
+    ctx.fillRect(0, 0, W, H);
+    var bw = Math.min(420, W * 0.6), bx = (W - bw) / 2, by = H / 2;
+    ctx.fillStyle = "#fff";
+    ctx.font = "bold 22px sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText("加载角色素材…", W / 2, by - 24);
+    ctx.fillStyle = "#333";
+    ctx.fillRect(bx, by, bw, 14);
+    ctx.fillStyle = "#f0a030";
+    ctx.fillRect(bx, by, bw * (pr.tot ? pr.done / pr.tot : 1), 14);
+    ctx.fillStyle = "#ccc";
+    ctx.font = "14px sans-serif";
+    ctx.fillText(pr.done + " / " + pr.tot, W / 2, by + 36);
+    var sl = loadStatusLines(), si;
+    ctx.font = "12px sans-serif";
+    ctx.fillStyle = "rgba(190,200,215,0.75)";
+    for (si = 0; si < sl.length; si++) ctx.fillText(sl[si], W / 2, by + 140 + si * 18);
+    var stalled = matchStall;
+    if (stalled) matchStall = true;
+    if (pr.err || matchStall) {
+      ctx.fillStyle = "#ff6060";
+      if (pr.err) ctx.fillText("有 " + pr.err + " 张失败：" + String(assetErrors[0] || "").split("?")[0], W / 2, by + 60);
+      else ctx.fillText("加载卡住超过 20 秒，请重试（已加载 " + pr.done + "/" + pr.tot + "）", W / 2, by + 60);
+      flowButton(W / 2 - 170, by + 80, 160, 40, "重试", true, function () {
+        matchStall = false;
+        retryFailed(loadKits.concat(["core"]));
+      });
+      flowButton(W / 2 + 10, by + 80, 160, 40, "返回菜单", false, function () { loadMode = "idle"; goMode(); });
+    } else {
+      ctx.fillStyle = "rgba(200,210,220,0.6)";
+      ctx.fillText("素材加载齐全后自动开始 · 仅加载本局角色", W / 2, by + 60);
+    }
+  }
+
+  function fightClockReset(limit) {
+    fightClock.limit = limit || 60;
+    fightClock.accum = 0;
+    fightClock.stamp = 0;
+  }
+  function fightClockPause() {
+    if (fightClock.stamp) {
+      fightClock.accum += performance.now() - fightClock.stamp;
+      fightClock.stamp = 0;
+    }
+  }
+  function fightClockResume() {
+    if (!fightClock.stamp) fightClock.stamp = performance.now();
+  }
+  function fightClockElapsed() {
+    var t = fightClock.accum;
+    if (fightClock.stamp) t += performance.now() - fightClock.stamp;
+    return t / 1000;
+  }
+  function beginCountdown() {
+    reset();
+    matchState = "countdown";
+    countdownPhase = "round";
+    countLeft = 1.35;
+    matchTime = (gameMode === "practice") ? 99999 : 60;
+    matchResult = null;
+    koId = null;
+    paused = false;
+    roundEndLeft = 0;
+    syncFlowHint();
+  }
+
+  function roundBannerText() {
+    if (gameMode === "practice") return "练习";
+    if (roundIndex >= 3) return "最终回";
+    if (roundIndex === 1) return "第一回";
+    if (roundIndex === 2) return "第二回";
+    return "第" + roundIndex + "回";
+  }
+
+  function skillNoCd(f, id) {
+    if (gameMode !== "practice") return false;
+    if (practiceNoCdAll) return true;
+    return !!(practiceNoCd && practiceNoCd[id]);
+  }
+
+  function applySkillCd(f, sk, id) {
+    if (!sk) return;
+    if (skillNoCd(f, id)) { sk.cd = 0; return; }
+    var mul = (voidSpace && isObito(f)) ? 0.65 : 1;
+    if (isTanjiro(f) && f.fireForm && (id === "water2" || id === "water4" || id === "water1")) mul *= 1.4;
+    sk.cd = sk.max * mul;
+  }
+  function tanjiroStartup(f, base) {
+    return (isTanjiro(f) && f.fireForm) ? base * 0.7 : base;
+  }
+  function tanjiroDmg(f, base) {
+    var d = base;
+    if (isTanjiro(f) && f.fireForm) d *= 2;
+    return Math.round(d);
+  }
+  function tanjiroSet(f) {
+    return f.fireForm ? tanjiro.fire : tanjiro.water;
+  }
+
+  function finishMatch(result) {
+    if (matchState === "result") return;
+    matchState = "result";
+    matchResult = result;
+    matchWinner = result;
+    syncFlowHint();
+  }
+
+  function finishRound(result) {
+    if (matchState !== "fight") return;
+    matchResult = result;
+    if (gameMode === "practice") {
+      finishMatch(result === "draw" ? "draw" : result);
+      return;
+    }
+    if (result === "L") roundWinsL += 1;
+    else if (result === "R") roundWinsR += 1;
+    if (roundWinsL >= 2 || roundWinsR >= 2 || roundIndex >= 3) {
+      var final = "draw";
+      if (roundWinsL > roundWinsR) final = "L";
+      else if (roundWinsR > roundWinsL) final = "R";
+      finishMatch(final);
+      return;
+    }
+    matchState = "roundEnd";
+    roundEndLeft = 2.2;
+    syncFlowHint();
+  }
+
+  // Menu only needs cards + scroll icons (loaded once, kept for the session).
+  function coreAssetsReady() {
+    var k, im;
+    for (k in cardImgs) { im = cardImgs[k]; if (!im._ok && !im._err) return false; }
+    for (k in scrollImgs) { im = scrollImgs[k]; if (!im._ok && !im._err) return false; }
+    return true;
+  }
+  function isMenuState() {
+    return matchState === "intro" || matchState === "mode" || matchState === "charSelect" || matchState === "result";
+  }
+
+  function humanControls(f) {
+    if (gameMode === "vs") return true;
+    if (gameMode === "coop") return f.id === "L" || f.id === "L2";
+    return f.id === playerSide;
+  }
+
+  function aiFighter() {
+    return playerSide === "L" ? right : left;
+  }
+
+  function humanFighter() {
+    return playerSide === "L" ? left : right;
+  }
+
+  function endByTime() {
+    if (isCoop()) {
+      var hpL = teamHp("L");
+      var hpR = teamHp("R");
+      if (hpL > hpR) finishRound("L");
+      else if (hpR > hpL) finishRound("R");
+      else finishRound("draw");
+      return;
+    }
+    if (left.hp > right.hp) finishRound("L");
+    else if (right.hp > left.hp) finishRound("R");
+    else finishRound("draw");
+  }
+
+  function tryCast(f, id) {
+    if (!f || f.hp <= 0) return;
+    if (paused || matchState !== "fight" || koId || (f.stun || 0) > 0 || isAirborne(f)) return;
+    var sk = f.skills[id];
+    if (!sk || sk.cd > 0) return;
+    if ((id === "phase" || id === "needle") && f.phase > 0) return;
+    if (id === "ult2" && !(isTanjiro(f) && f.fireForm)) return;
+    if (id === "ult1" && isTanjiro(f) && f.fireForm) return;
+    var cost = sk.cost || 0;
+    if (id === "ult1" && isTanjiro(f)) cost = Math.floor((f.chakra || 0) * 0.5);
+    if ((f.chakra || 0) < cost) return;
+    // Using any other Obito skill during 虚化 drops out of it right away.
+    if (isObito(f) && f.phase > 0 && id !== "phase") endPhase(f);
+    if (id === "space" || id === "dash") {
+      castSpace(f);
+      f.chakra -= cost;
+      return;
+    }
+    if (id === "spike") {
+      castShield(f, 1);
+      return;
+    }
+    if (id === "phase" || id === "needle") {
+      castNeedle(f);
+      f.chakra -= cost;
+      applySkillCd(f, sk, id);
+      return;
+    }
+    if (f.busy > 0 || f.dashT > 0 || (f.counterT || 0) > 0 || (f.ult2Phase || 0) > 0) return;
+    f.chakra -= cost;
+    applySkillCd(f, sk, id);
+    if (id === "punch") beginMelee(f, "punch", 0.56, 0.24);
+    else if (id === "slash") beginMelee(f, "slash", 0.28, 0.08);
+    else if (id === "thrust") beginMelee(f, "combo", 0.72, 0.22, 0.48);
+    else if (id === "cleave") beginMelee(f, "kick", 0.62, 0.34);
+    else if (id === "breath") castBreath(f);
+    else if (id === "fire") castRod(f);
+    else if (id === "wave") castWave(f);
+    else if (id === "tele" || id === "back") castBackstep(f);
+    else if (id === "swap") castRetreat(f);
+    else if (id === "pull") castPull(f);
+    else if (id === "atk") castTanjiroAtk(f);
+    else if (id === "water2") castTanjiroWater2(f);
+    else if (id === "water4") castTanjiroWater4(f);
+    else if (id === "water1") castTanjiroWater1(f);
+    else if (id === "ult1") castTanjiroUlt1(f);
+    else if (id === "ult2") castTanjiroUlt2(f);
+    else if (id.indexOf("scroll_") === 0) castScroll(f, id);
+  }
+
+  function castTanjiroAtk(f) {
+    var start = tanjiroStartup(f, 0.12);
+    var dur = start + 0.38;
+    plantCaster(f);
+    beginMelee(f, "t_atk", dur, start + 0.08);
+    f.meleeDmg = tanjiroDmg(f, 12);
+    f.meleeRange = tanjiroBodyW * 1.35;
+  }
+  function castTanjiroWater2(f) {
+    var start = tanjiroStartup(f, 0.15);
+    plantCaster(f);
+    f.anim = "t_water2";
+    f.animT = 0;
+    f.animDur = start + 0.45;
+    f.busy = f.animDur;
+    f.hitPending = false;
+    f.barrierT = 1.5;
+    f.barrierUsed = false;
+    f.hyperArmor = Math.max(f.hyperArmor || 0, 1.5 + 0.55);
+    spawnFloater(f.x, f.y - 170, "水柱", f.palette.glow);
+    rings.push({ x: f.x, y: f.y - 40, life: 0.45, max: 0.45, color: "#5ee0d0", r0: 20, r1: tanjiroBodyW * 0.9 });
+  }
+  function castTanjiroWater4(f) {
+    var start = tanjiroStartup(f, 0.10);
+    plantCaster(f);
+    f.anim = "t_water4";
+    f.animT = 0;
+    f.animDur = start + 0.42;
+    f.busy = f.animDur;
+    f.hitPending = false;
+    f.hyperArmor = Math.max(f.hyperArmor || 0, 0.3);
+    var moveT = 0.22;
+    f.dashT = start + moveT;
+    f.dashVx = f.facing * (tanjiroBodyW * 2.5) / moveT;
+    f.dashVy = 0;
+    f.dashHit = false;
+    f.dashDmg = tanjiroDmg(f, 18);
+    f.dashDelay = start;
+  }
+  function castTanjiroWater1(f) {
+    var start = tanjiroStartup(f, 0.18);
+    plantCaster(f);
+    f.anim = "t_water1";
+    f.animT = 0;
+    f.animDur = start + 0.42;
+    f.busy = f.animDur;
+    f.hitPending = true;
+    f.hitAt = start + 0.06;
+    f.meleeDmg = tanjiroDmg(f, 20);
+    f.meleeRange = tanjiroBodyW * 1.5;
+    f.water1Blink = false;
+    f.water1At = start;
+  }
+  function castTanjiroUlt1(f) {
+    plantCaster(f);
+    f.anim = "t_ult1";
+    f.animT = 0;
+    f.animDur = 0.4 + 0.35;
+    f.busy = f.animDur;
+    f.hitPending = false;
+    f.pendingFireForm = true;
+    spawnFloater(f.x, f.y - 180, "火之形态", "#ff6a3a");
+    rings.push({ x: f.x, y: f.y - 50, life: 0.6, max: 0.6, color: "#ff6a3a", r0: 24, r1: 200 });
+  }
+  function enterFireForm(f) {
+    f.fireForm = true;
+    f.pendingFireForm = false;
+    f.moveSpeed = (f.baseMoveSpeed || 480) * 1.25;
+    spawnFloater(f.x, f.y - 160, "燃烧", "#ff8a40");
+  }
+  function exitFireForm(f) {
+    if (!f.fireForm) return;
+    f.fireForm = false;
+    f.moveSpeed = f.baseMoveSpeed || 480;
+    spawnFloater(f.x, f.y - 160, "熄灭", "#88c0c8");
+  }
+  function castTanjiroUlt2(f) {
+    plantCaster(f);
+    f.anim = "t_ult2";
+    f.animT = 0;
+    f.animDur = 0.2 + 1.5 + 0.35;
+    f.busy = f.animDur;
+    f.hitPending = false;
+    f.ult2Phase = 1;
+    f.ult2T = 0;
+    f.ult2Hits = 0;
+    f.hyperArmor = Math.max(f.hyperArmor || 0, f.animDur);
+    f.chakra = 0;
+    f.invuln = Math.max(f.invuln || 0, 0.25);
+    spawnFloater(f.x, f.y - 180, "瞬斩", "#ffd0a0");
+  }
+  function triggerTanjiroCounter(defender, attacker) {
+    if (!isTanjiro(defender) || defender.barrierUsed || !(defender.barrierT > 0)) return;
+    if (!attacker || attacker.hp <= 0) return;
+    defender.barrierUsed = true;
+    defender.barrierT = 0;
+    plantCaster(defender);
+    var behind = clampSpot(attacker.x - attacker.facing * tanjiroBodyW * 0.85, attacker.y);
+    defender.x = behind.x;
+    defender.y = behind.y;
+    defender.facing = attacker.x >= defender.x ? 1 : -1;
+    defender.anim = "t_counter";
+    defender.animT = 0;
+    defender.animDur = 0.55;
+    defender.busy = 0.55;
+    defender.counterT = 0.55;
+    defender.hitPending = true;
+    defender.hitAt = 0.22;
+    defender.meleeDmg = tanjiroDmg(defender, 18);
+    defender.meleeRange = tanjiroBodyW * 1.6;
+    defender.hyperArmor = Math.max(defender.hyperArmor || 0, 0.55);
+    spawnFloater(defender.x, defender.y - 170, "反击", defender.palette.glow);
+  }
+
+  function castScroll(f, id) {
+    var sk = f.skills[id];
+    var def = scrollById(id);
+    var opp = other(f);
+    var color = (def && def.color) || (sk && sk.color) || "#fff";
+    f.anim = "cast";
+    f.animT = 0;
+    f.animDur = 0.42;
+    f.busy = 0.28;
+    f.hitPending = false;
+    spawnFloater(f.x, f.y - 170, (def && def.name) || "密卷", color);
+    bursts.push({
+      x: f.x + f.facing * 24,
+      y: f.y - 90,
+      life: 0.4,
+      max: 0.4,
+      kind: "flash",
+      facing: f.facing || 1,
+      scale: 1.6
+    });
+    if (id === "scroll_quake") {
+      // 霸体 4s: immune to stun / knockback / launch; still movable by pull/grab.
+      f.hyperArmor = Math.max(f.hyperArmor || 0, 4);
+      rings.push({ x: f.x, y: f.y - 40, life: 0.55, max: 0.55, color: color, r0: 24, r1: 160 });
+      rings.push({ x: f.x, y: f.y - 40, life: 0.75, max: 0.75, color: "#ff9040", r0: 10, r1: 120 });
+    } else if (id === "scroll_bolt") {
+      // Instant full chakra + lock full for 10s.
+      f.chakra = f.maxChakra;
+      f.chakraLock = Math.max(f.chakraLock || 0, 10);
+      rings.push({ x: f.x, y: f.y - 50, life: 0.5, max: 0.5, color: color, r0: 18, r1: 180 });
+      var bi;
+      for (bi = 0; bi < 10; bi++) {
+        sparks.push({
+          x: f.x + (Math.random() * 40 - 20),
+          y: f.y - 60 - Math.random() * 80,
+          vx: (Math.random() - 0.5) * 120,
+          vy: -80 - Math.random() * 120,
+          life: 0.4,
+          max: 0.4,
+          color: color,
+          size: 5 + Math.random() * 4
+        });
+      }
+    } else if (id === "scroll_blade") {
+      // Reset kit skill CDs; this scroll stays on its own CD.
+      var ck;
+      for (ck in f.skills) {
+        if (ck === id) continue;
+        if (String(ck).indexOf("scroll_") === 0) continue;
+        f.skills[ck].cd = 0;
+      }
+      rings.push({ x: f.x, y: f.y - 40, life: 0.45, max: 0.45, color: color, r0: 16, r1: 150 });
+      bursts.push({
+        x: f.x, y: f.y - 90,
+        life: 0.35, max: 0.35, kind: "impact", facing: f.facing || 1, scale: 1.4
+      });
+    } else if (id === "scroll_gale") {
+      // Radius burst: 1s stun + dispel enemy 霸体.
+      var radius = 300;
+      rings.push({ x: f.x, y: f.y - 40, life: 0.55, max: 0.55, color: color, r0: 28, r1: radius });
+      rings.push({ x: f.x, y: f.y - 40, life: 0.4, max: 0.4, color: "#a0c0ff", r0: 10, r1: 200 });
+      var dxg = opp.x - f.x;
+      var dyg = opp.y - f.y;
+      if (Math.sqrt(dxg * dxg + dyg * dyg) <= radius && opp.phase <= 0 && opp.invuln <= 0 && opp.shield <= 0 && !isDowned(opp)) {
+        if ((opp.hyperArmor || 0) > 0) {
+          opp.hyperArmor = 0;
+          spawnFloater(opp.x, opp.y - 200, "驱散霸体", "#a0c8ff");
+        }
+        opp.stun = Math.max(opp.stun || 0, 1);
+        opp.busy = 0;
+        opp.dashT = 0;
+        opp.hitPending = false;
+        opp.hitPending2 = false;
+        opp.hitLight = true;
+        opp.hitLean = Math.max(opp.hitLean || 0, 12 * Math.PI / 180);
+        opp.hitLeanDir = opp.x >= f.x ? 1 : -1;
+        opp.airborne = false;
+        opp.airH = 0;
+        opp.airV = 0;
+        opp.launchVx = 0;
+        opp.launchVy = 0;
+        spawnFloater(opp.x, opp.y - 170, "僵直", "#cfe0ff");
+        bursts.push({
+          x: opp.x, y: opp.y - 80,
+          life: 0.35, max: 0.35, kind: "impact", facing: opp.facing || 1, scale: 1.5
+        });
+      }
+    }
+  }
+
+  function beginMelee(f, anim, dur, hitAt, hitAt2) {
+    f.anim = anim;
+    f.animT = 0;
+    f.animDur = dur;
+    f.hitAt = hitAt;
+    f.hitPending = true;
+    f.hitAt2 = hitAt2 || 0;
+    f.hitPending2 = !!hitAt2;
+    f.busy = dur;
+  }
+
+  function launchAt(f, kind, speed, r, dmg, life, originOff, chest) {
+    var opp = other(f);
+    var x0 = f.x + f.facing * originOff;
+    var y0 = f.y - chest;
+    var tx = opp.x;
+    var ty = opp.y - chest;
+    var dx = tx - x0;
+    var dy = ty - y0;
+    var len = Math.sqrt(dx * dx + dy * dy) || 1;
+    projectiles.push({
+      kind: kind,
+      x: x0,
+      y: y0,
+      vx: dx / len * speed,
+      vy: dy / len * speed,
+      r: r,
+      dmg: dmg,
+      owner: f.id,
+      life: life
+    });
+  }
+
+  function endPhase(f) {
+    f.phase = 0;
+    f.phaseEye = 0;
+    phaseSlow = 0;
+  }
+
+  function castNeedle(f) {
+    f.phase = (voidSpace && isObito(f)) ? 4.5 : 3;
+    f.phaseEye = 0;
+    phaseSlow = 0.5;
+    spawnFloater(f.x, f.y - 170, "无敌", "#d5dde4");
+  }
+
+  function castBreath(f) {
+    var dir = f.facing < 0 ? -1 : 1;
+    f.anim = "breath";
+    f.animT = 0;
+    // 32 frames at ~20fps ≈ 1.6s; hold breath pose for the full VFX.
+    f.animDur = 1.6;
+    f.busy = 1.45;
+    f.hitPending = false;
+    projectiles.push({
+      kind: "firebreath",
+      x: f.x + dir * 26,
+      y: f.y - 118,
+      vx: 0,
+      vy: 0,
+      r: 20,
+      dmg: boosted(f, 15),
+      owner: f.id,
+      facing: f.facing,
+      life: 1.6,
+      age: 0,
+      fps: 20,
+      drawScale: 1.1,
+      hit: false,
+      tickAcc: 0
+    });
+  }
+
+  function castFire(f) {
+    var dir = f.facing < 0 ? -1 : 1;
+    f.anim = "cast";
+    f.animT = 0;
+    f.animDur = 0.28;
+    f.busy = 0.26;
+    f.hitPending = false;
+    projectiles.push({
+      kind: "fire",
+      x: f.x + dir * 42,
+      y: f.y - 78,
+      vx: dir * 624,
+      vy: 0,
+      r: 18,
+      dmg: 15,
+      owner: f.id,
+      life: 2.4,
+      age: 0,
+      scale: 0.28,
+      seed: Math.random() * 10
+    });
+  }
+
+  function castWave(f) {
+    var dir = f.facing < 0 ? -1 : 1;
+    f.anim = "cast";
+    f.animT = 0;
+    f.animDur = 0.2;
+    f.busy = 0.16;
+    f.hitPending = false;
+    projectiles.push({
+      kind: "wave",
+      x: f.x + dir * 36,
+      y: f.y - 72,
+      vx: dir * 560,
+      vy: 0,
+      r: 12,
+      dmg: boosted(f, 11),
+      owner: f.id,
+      life: 0.9
+    });
+  }
+
+  function blinkStrike(f) {
+    var dir = f.facing < 0 ? -1 : 1;
+    ghosts.push({
+      x: f.x, y: f.y, facing: f.facing, life: 0.28, max: 0.28,
+      palette: f.palette, weapon: f.weapon, owner: f.id, kit: f.kit
+    });
+    f.invuln = (voidSpace && isObito(f)) ? 0.4 : 0.25;
+    var spot = clampSpot(f.x + dir * 1050, f.y);
+    // pages20: keep the blink landing inside the visible play area (clear of the on-screen sticks).
+    spot.x = clamp(spot.x, 175, W - 175);
+    f.x = spot.x;
+    f.y = spot.y;
+    var opp = other(f);
+    var dx = opp.x - f.x;
+    var dy = opp.y - f.y;
+    var dist = Math.sqrt(dx * dx + dy * dy);
+    var ahead = Math.atan2(dy, dx * f.facing);
+    if (Math.abs(ahead) < Math.PI * 0.72 && dist < 112) {
+      hurt(opp, boosted(f, 8), f.palette.glow);
+    }
+  }
+
+  function castBackstep(f) {
+    f.anim = "tele";
+    f.animT = 0;
+    f.animDur = 0.76;
+    f.busy = 0.76;
+    f.hitPending = false;
+    f.teleBlinked = false;
+  }
+
+  function castRod(f) {
+    var dir = f.facing < 0 ? -1 : 1;
+    var palm = palmOf(f);
+    f.anim = "rod";
+    f.animT = 0;
+    f.animDur = 0.55;
+    f.busy = 0.4;
+    f.hitPending = false;
+    projectiles.push({
+      kind: "rod",
+      x: palm.x,
+      y: palm.y,
+      vx: dir * 900,
+      vy: 0,
+      r: 5,
+      dmg: 15,
+      owner: f.id,
+      life: 1.45
+    });
+  }
+
+  function painBodyH() {
+    return 168 * painScale;
+  }
+
+  function shieldRadius() {
+    return painBodyH() * 0.78;
+  }
+
+  function shieldWave(angle, spin) {
+    return 1
+      + 0.11 * Math.sin(angle * 3 + spin)
+      + 0.07 * Math.sin(angle * 5 - spin * 1.35)
+      + 0.045 * Math.sin(angle * 8 + spin * 0.65);
+  }
+
+  function shieldCenter(f) {
+    var r = shieldRadius();
+    return { x: f.x, y: f.y - r };
+  }
+
+  function palmOf(f) {
+    return { x: f.x + f.facing * 78 * painScale, y: f.y - 108 * painScale };
+  }
+
+  function shieldAxes() {
+    var rad = shieldRadius();
+    return { rx: rad * 0.62, ry: rad * 0.92 };
+  }
+
+  function castShield(f, dur) {
+    if (paused || matchState !== "fight" || koId || (f.stun || 0) > 0 || isAirborne(f)) return false;
+    var sk = f.skills.spike;
+    if (!sk || sk.cd > 0 || f.shield > 0 || f.shieldWind > 0) return false;
+    if (f.busy > 0 || f.dashT > 0) return false;
+    if ((f.chakra || 0) < (sk.cost || 0)) return false;
+    f.chakra -= sk.cost || 0;
+    f.shield = 0;
+    f.shieldWind = repulseWind;
+    f.repulseOn = true;
+    plantCaster(f);
+    f.repulseT = 0;
+    f.repulseLong = true;
+    f.shieldPlan = repulseSpan(true) - repulseWind;
+    f.shieldDur = f.shieldPlan;
+    f.shieldHit = false;
+    f.anim = "idle";
+    f.animT = 0;
+    f.animDur = 0.2;
+    f.busy = repulseWind;
+    f.hitPending = false;
+    return true;
+  }
+
+  function shieldPressDown(f) {
+    f.shieldKeyAt = performance.now();
+    if (castShield(f, 3)) f.shieldKey = true;
+  }
+
+  function shieldPressUp(f) {
+    if (!f.shieldKey) return;
+    f.shieldKey = false;
+    var held = (performance.now() - (f.shieldKeyAt || performance.now())) / 1000;
+    var long = held >= 0.35;
+    f.repulseLong = long;
+    var remain = repulseSpan(long) - (f.repulseT || 0);
+    if (remain < 0.05) remain = 0.05;
+    if (f.shieldWind > 0) {
+      f.shieldPlan = Math.max(0.05, remain - f.shieldWind);
+      f.shieldDur = f.shieldPlan;
+      return;
+    }
+    if (!(f.shield > 0)) return;
+    f.shield = remain;
+    f.shieldDur = repulseSpan(long) - repulseWind;
+  }
+
+  function castPull(f) {
+    f.anim = "pull";
+    f.animT = 0;
+    f.animDur = pullCastSpan;
+    f.busy = pullCastSpan * 0.92;
+    f.hitPending = false;
+    f.pullOn = true;
+    f.pullAnimT = 0;
+    f.pullApplied = false;
+    f.pullFx = pullCastSpan;
+    plantCaster(f);
+  }
+
+  function applyPullGrab(f) {
+    if (f.pullApplied) return;
+    f.pullApplied = true;
+    var opp = other(f);
+    var palm = palmOf(f);
+    if (opp.phase > 0 || opp.invuln > 0 || opp.shield > 0) return;
+    var pdx = Math.abs(opp.x - palm.x);
+    var pdy = Math.abs((opp.y - 70) - palm.y);
+    if (pdx > 600 || pdy > 240) return;
+    opp.pullT = 0.34;
+    opp.pullToX = palm.x - f.facing * 30;
+    opp.pullToY = f.y;
+    opp.pullHit = false;
+    opp.rooted = 0;
+  }
+
+  function castRetreat(f) {
+    var dir = f.facing < 0 ? 1 : -1;
+    var gi;
+    for (gi = 0; gi < 3; gi++) {
+      ghosts.push({
+        x: f.x + dir * gi * 48, y: f.y, facing: f.facing,
+        life: 0.42 - gi * 0.08, max: 0.42,
+        palette: f.palette, weapon: f.weapon, owner: f.id, kit: f.kit,
+        alpha: 0.78 - gi * 0.18
+      });
+    }
+    f.invuln = 0.28;
+    var spot = clampSpot(f.x + dir * 340, f.y);
+    f.x = spot.x;
+    f.y = spot.y;
+    f.anim = "back";
+    f.animT = 0;
+    f.animDur = 0.48;
+    f.busy = 0.42;
+    f.hitPending = false;
+  }
+
+  function castSpace(f) {
+    voidSpace = !voidSpace;
+    voidT = voidSpace ? VOID_DUR : 0;
+    voidUntil = voidSpace ? (performance.now() + VOID_DUR * 1000) : 0;
+    f.anim = "cast";
+    f.animT = 0;
+    f.animDur = 0.2;
+    f.busy = 0.1;
+    f.hitPending = false;
+    // Buffs (damage/CD/phase length) stay Obito-only via boosted()/castNeedle.
+    // Never freeze the opponent: clear pull/root locks and keep both movable.
+    left.pullT = 0;
+    right.pullT = 0;
+    left.rooted = 0;
+    right.rooted = 0;
+    var a = clampSpot(left.x, left.y);
+    var b = clampSpot(right.x, right.y);
+    left.x = a.x;
+    left.y = a.y;
+    right.x = b.x;
+    right.y = b.y;
+    var sdx = right.x - left.x;
+    var sdy = right.y - left.y;
+    var ad = Math.sqrt(sdx * sdx + sdy * sdy);
+    if (ad < 56) {
+      var push = (56 - (ad > 0.01 ? ad : 0.01)) * 0.5;
+      var nx = ad > 0.01 ? sdx / ad : 1;
+      var ny = ad > 0.01 ? sdy / ad : 0;
+      a = clampSpot(left.x - nx * push, left.y - ny * push);
+      b = clampSpot(right.x + nx * push, right.y + ny * push);
+      left.x = a.x;
+      left.y = a.y;
+      right.x = b.x;
+      right.y = b.y;
+    }
+    var oKit = fighterByKit("obito");
+    if (!voidSpace && oKit && oKit.phase > 3) oKit.phase = 3;
+    spawnFloater(f.x, f.y - 160, voidSpace ? "进入" : "返回", f.palette.glow);
+  }
+
+  function castArmor(f) {
+    f.armor = 6;
+    f.skills.spike.cd = 0;
+    f.anim = "cast";
+    f.animT = 0;
+    f.animDur = 0.28;
+    f.busy = 0.16;
+    f.hitPending = false;
+    spawnFloater(f.x, f.y - 180, "剑使", "#e2b6ff");
+  }
+
+  function castSwap(f) {
+    var opp = other(f);
+    var dx = opp.x - f.x;
+    var dy = opp.y - f.y;
+    var len = Math.sqrt(dx * dx + dy * dy) || 1;
+    var nx = opp.x + dx / len * 118;
+    var ny = opp.y + dy / len * 118;
+    var spot = clampSpot(nx, ny);
+    nx = spot.x;
+    ny = spot.y;
+    if (Math.sqrt((nx - opp.x) * (nx - opp.x) + (ny - opp.y) * (ny - opp.y)) < 72) {
+      var edge = xLimits(clamp(opp.y, MIN_Y, MAX_Y));
+      nx = f.x <= opp.x ? edge.max : edge.min;
+      ny = clamp(opp.y, MIN_Y, MAX_Y);
+      spot = clampSpot(nx, ny);
+      nx = spot.x;
+      ny = spot.y;
+    }
+    rings.push({ x: f.x, y: f.y, life: 0.35, max: 0.35, color: f.palette.glow });
+    f.x = nx;
+    f.y = ny;
+    rings.push({ x: f.x, y: f.y, life: 0.4, max: 0.4, color: f.palette.trim });
+    f.invuln = 0.14;
+    f.anim = "swap";
+    f.animT = 0;
+    f.animDur = 0.22;
+    f.busy = 0.18;
+    f.hitPending = false;
+  }
+
+  function planarDist(ax, ay, bx, by) {
+    var dx = ax - bx;
+    var dy = ay - by;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  function spawnComboFlash(f) {
+    bursts.push({
+      kind: "flash",
+      x: f.x + f.facing * 78,
+      y: f.y - 96,
+      life: 0.16,
+      max: 0.16,
+      facing: f.facing
+    });
+  }
+
+  function spawnKickBurst(f) {
+    bursts.push({
+      kind: "impact",
+      x: f.x + f.facing * 108,
+      y: f.y - 64,
+      life: 0.26,
+      max: 0.26,
+      facing: f.facing
+    });
+  }
+
+
+  function updateTanjiroUlt2(f, dt) {
+    // Phase 1 (0–1.5s after 0.2 startup): blink slashes around nearest enemies
+    // Phase 2: teleport behind nearest foe + horizontal finisher + slow-mo
+    var start = 0.2;
+    var t = f.ult2T || 0;
+    plantCaster(f);
+    if (t < start) return;
+    var active = t - start;
+    if (active < 1.5) {
+      var tick = Math.floor(active / 0.28);
+      if (tick > (f.ult2Hits || 0) && tick < 5) {
+        f.ult2Hits = tick;
+        var foes = livingEnemies(f);
+        var foe = foes.length ? foes[tick % foes.length] : other(f);
+        if (foe) {
+          var ang = Math.random() * Math.PI * 2;
+          var rad = 90 + Math.random() * 70;
+          var spot = clampSpot(foe.x + Math.cos(ang) * rad, foe.y + Math.sin(ang) * rad * 0.35);
+          ghosts.push({ x: f.x, y: f.y, facing: f.facing, life: 0.2, max: 0.2, palette: f.palette, weapon: f.weapon, owner: f.id, kit: f.kit });
+          f.x = spot.x;
+          f.y = spot.y;
+          f.facing = foe.x >= f.x ? 1 : -1;
+          hurt(foe, tanjiroDmg(f, 10), f.palette.hot, { attacker: f });
+          bursts.push({ x: foe.x, y: foe.y - 80, life: 0.22, max: 0.22, kind: "impact", facing: f.facing, scale: 1.2 });
+        }
+      }
+      return;
+    }
+    if (f.ult2Phase === 1) {
+      f.ult2Phase = 2;
+      var foe2 = other(f);
+      if (foe2) {
+        var behind = clampSpot(foe2.x - foe2.facing * tanjiroBodyW * 1.1, foe2.y);
+        ghosts.push({ x: f.x, y: f.y, facing: f.facing, life: 0.28, max: 0.28, palette: f.palette, weapon: f.weapon, owner: f.id, kit: f.kit });
+        f.x = behind.x;
+        f.y = behind.y;
+        f.facing = foe2.x >= f.x ? 1 : -1;
+        hurt(foe2, tanjiroDmg(f, 22), f.palette.hot, { attacker: f });
+        phaseSlow = Math.max(phaseSlow || 0, 0.35);
+        spawnFloater(foe2.x, foe2.y - 190, "终击", "#ffe7a0");
+        bursts.push({ x: foe2.x, y: foe2.y - 70, life: 0.35, max: 0.35, kind: "impact", facing: f.facing, scale: 1.8 });
+      }
+      exitFireForm(f);
+    }
+  }
+
+  function resolveMelee(f) {
+    var opp = other(f);
+    var dx = opp.x - f.x;
+    var dy = opp.y - f.y;
+    var dist = Math.sqrt(dx * dx + dy * dy);
+    var ahead = Math.atan2(dy, dx * f.facing);
+    var inFront = Math.abs(ahead) < Math.PI * 0.72;
+    if (f.anim === "slash" || f.anim === "punch") {
+      if (inFront && dist < 124) hurt(opp, boosted(f, 8), f.palette.glow);
+    } else if (f.anim === "thrust") {
+      if (inFront && dist < 150) hurt(opp, 9, right.palette.glow);
+    } else if (f.anim === "cleave") {
+      if (inFront && dist < 128) hurt(opp, 14, right.palette.glow);
+    } else if (f.anim === "combo") {
+      if (inFront && dist < 132) hurt(opp, 8, right.palette.glow);
+    } else if (f.anim === "kick") {
+      if (inFront && dist < 156) hurt(opp, 16, right.palette.glow);
+    } else if (f.anim === "t_atk" || f.anim === "t_water1" || f.anim === "t_counter") {
+      var rng = f.meleeRange || (tanjiroBodyW * 1.4);
+      if (inFront && dist < rng) hurt(opp, f.meleeDmg || 12, f.palette.glow, { attacker: f });
+    }
+  }
+
+  function walkFighter(f, dt) {
+    if (f.rooted > 0 || f.pullT > 0 || (f.stun || 0) > 0 || isAirborne(f) || isDowned(f)) {
+      f.gait = "idle";
+      return;
+    }
+    var ix = 0;
+    var iy = 0;
+    if (!humanControls(f)) {
+      // AI still acts in void space — no special freeze when voidSpace is on.
+      ix = f.aiIx || 0;
+      iy = f.aiIy || 0;
+    } else if (f.id === "L") {
+      // Obito: WASD + left stick
+      if (keysDown.a) ix -= 1;
+      if (keysDown.d) ix += 1;
+      if (keysDown.w) iy -= 1;
+      if (keysDown.s) iy += 1;
+      ix += sticks[0].nx;
+      iy += sticks[0].ny;
+    } else {
+      // Pain: always arrow keys (incl. depth via Up/Down). Never WASD.
+      if (keysDown.ArrowLeft) ix -= 1;
+      if (keysDown.ArrowRight) ix += 1;
+      if (keysDown.ArrowUp) iy -= 1;
+      if (keysDown.ArrowDown) iy += 1;
+      // Mobile: human-as-Pain uses left stick; VS uses right stick.
+      if ((gameMode === "ai" || gameMode === "practice") && playerSide === "R") {
+        ix += sticks[0].nx;
+        iy += sticks[0].ny;
+      } else {
+        ix += sticks[1].nx;
+        iy += sticks[1].ny;
+      }
+    }
+    if (ix < 0) f.facing = -1;
+    else if (ix > 0) f.facing = 1;
+    else {
+      // pages20: with no horizontal input, turn back toward the nearest foe
+      // (e.g. after Q's lunge carries Obito past the opponent).
+      var foeF = nearestEnemy(f);
+      if (foeF && foeF !== f && Math.abs(foeF.x - f.x) > 6) f.facing = foeF.x > f.x ? 1 : -1;
+    }
+    if (ix === 0 && iy === 0) {
+      f.gait = "idle";
+      return;
+    }
+    f.gait = "run";
+    var len = Math.sqrt(ix * ix + iy * iy);
+    var speed = f.moveSpeed || (isObito(f) ? 546 : 437);
+    var step = clampSpot(f.x + ix / len * speed * dt, f.y + iy / len * speed * dt);
+    f.x = step.x;
+    f.y = step.y;
+  }
+
+  function updateOneAI(f, dt) {
+    if (!f || f.hp <= 0) return;
+    var opp = isCoop() ? nearestHuman(f) : ((gameMode === "ai" || gameMode === "practice") ? humanFighter() : nearestEnemy(f));
+    if (!opp) return;
+    if ((f.stun || 0) > 0 || f.rooted > 0 || f.pullT > 0 || isAirborne(f) || isDowned(f)) {
+      f.aiIx = 0;
+      f.aiIy = 0;
+      return;
+    }
+    var dx = opp.x - f.x;
+    var dy = opp.y - f.y;
+    var dist = Math.sqrt(dx * dx + dy * dy) || 1;
+    if (dx < 0) f.facing = -1;
+    else if (dx > 0) f.facing = 1;
+    f.aiThink = (f.aiThink || 0) - dt;
+    var wantX = 0;
+    var wantY = 0;
+    var ideal = 118;
+    if (dist > ideal + 28) {
+      wantX = dx / dist;
+      wantY = dy / dist * 0.55;
+    } else if (dist < ideal - 36) {
+      wantX = -dx / dist;
+      wantY = -dy / dist * 0.35;
+    } else {
+      wantY = (dy > 18 ? 0.35 : (dy < -18 ? -0.35 : 0));
+      if (Math.abs(dy) < 12 && Math.random() < 0.01) wantX = (Math.random() < 0.5 ? -0.2 : 0.2);
+    }
+    if (opp.phase > 0 && dist < 160) {
+      wantX = -dx / dist;
+      wantY = (Math.random() - 0.5) * 0.4;
+    }
+    f.aiIx = wantX;
+    f.aiIy = wantY;
+    if (f.busy > 0 || f.dashT > 0 || f.shield > 0 || f.shieldWind > 0) return;
+    if (f.aiThink > 0) return;
+    // pages23: slower AI decision cadence (was 0.18–0.40s).
+    f.aiThink = 0.55 + Math.random() * 0.45;
+    if (isPain(f)) {
+      if (dist < 130 && f.skills.thrust && f.skills.thrust.cd <= 0 && f.chakra >= (f.skills.thrust.cost || 0)) {
+        tryCast(f, "thrust");
+        return;
+      }
+      if (dist < 150 && f.skills.cleave && f.skills.cleave.cd <= 0 && f.chakra >= (f.skills.cleave.cost || 0) && Math.random() < 0.14) {
+        tryCast(f, "cleave");
+        return;
+      }
+      if (dist > 160 && dist < 520 && f.skills.fire && f.skills.fire.cd <= 0 && f.chakra >= (f.skills.fire.cost || 0) && Math.random() < 0.06) {
+        tryCast(f, "fire");
+        return;
+      }
+      if (dist < 110 && f.skills.swap && f.skills.swap.cd <= 0 && f.chakra >= (f.skills.swap.cost || 0) && Math.random() < 0.16) {
+        tryCast(f, "swap");
+        return;
+      }
+      if (dist > 90 && dist < 420 && f.skills.pull && f.skills.pull.cd <= 0 && f.chakra >= (f.skills.pull.cost || 0) && Math.random() < 0.14) {
+        tryCast(f, "pull");
+        return;
+      }
+      if (dist < 150 && f.skills.spike && f.skills.spike.cd <= 0 && f.chakra >= (f.skills.spike.cost || 0) && Math.random() < 0.09) {
+        tryCast(f, "spike");
+        return;
+      }
+    } else if (isTanjiro(f)) {
+      if (f.fireForm && f.skills.ult2 && Math.random() < 0.16) {
+        tryCast(f, "ult2");
+        return;
+      }
+      if (!f.fireForm && dist < 220 && f.skills.ult1 && f.skills.ult1.cd <= 0 && f.chakra > 40 && Math.random() < 0.06) {
+        tryCast(f, "ult1");
+        return;
+      }
+      if (dist < 130 && f.skills.atk && f.skills.atk.cd <= 0) {
+        tryCast(f, "atk");
+        return;
+      }
+      if (dist < 200 && f.skills.water4 && f.skills.water4.cd <= 0 && f.chakra >= 20 && Math.random() < 0.2) {
+        tryCast(f, "water4");
+        return;
+      }
+      if (dist < 160 && f.skills.water1 && f.skills.water1.cd <= 0 && f.chakra >= 22 && Math.random() < 0.16) {
+        tryCast(f, "water1");
+        return;
+      }
+      if (dist < 150 && f.skills.water2 && f.skills.water2.cd <= 0 && f.chakra >= 25 && Math.random() < 0.06) {
+        tryCast(f, "water2");
+        return;
+      }
+      if (f.scrollId && f.skills[f.scrollId] && f.skills[f.scrollId].cd <= 0 && f.chakra >= (f.skills[f.scrollId].cost || 0) && Math.random() < 0.05) {
+        tryCast(f, f.scrollId);
+        return;
+      }
+    } else {
+      if (dist < 130 && f.skills.punch && f.skills.punch.cd <= 0) {
+        tryCast(f, "punch");
+        return;
+      }
+      if (dist > 140 && dist < 420 && f.skills.breath && f.skills.breath.cd <= 0 && f.chakra >= (f.skills.breath.cost || 0) && Math.random() < 0.2) {
+        tryCast(f, "breath");
+        return;
+      }
+      if (dist > 100 && dist < 360 && f.skills.tele && f.skills.tele.cd <= 0 && f.chakra >= (f.skills.tele.cost || 0) && Math.random() < 0.16) {
+        tryCast(f, "tele");
+        return;
+      }
+      if (dist < 160 && f.skills.phase && f.skills.phase.cd <= 0 && f.chakra >= (f.skills.phase.cost || 0) && f.phase <= 0 && Math.random() < 0.06) {
+        tryCast(f, "phase");
+        return;
+      }
+      if (f.skills.space && f.skills.space.cd <= 0 && Math.random() < 0.08) {
+        tryCast(f, "space");
+        return;
+      }
+      if (f.scrollId && f.skills[f.scrollId] && f.skills[f.scrollId].cd <= 0 && f.chakra >= (f.skills[f.scrollId].cost || 0) && Math.random() < 0.06) {
+        tryCast(f, f.scrollId);
+        return;
+      }
+    }
+  }
+
+  function updateAI(dt) {
+    if (matchState !== "fight" || koId) return;
+    if (gameMode === "vs") return;
+    if (gameMode === "practice" && practiceDummy) {
+      var dum = aiFighter();
+      if (dum) { dum.aiIx = 0; dum.aiIy = 0; }
+      return;
+    }
+    if (gameMode === "coop") {
+      updateOneAI(right, dt);
+      updateOneAI(right2, dt);
+      return;
+    }
+    updateOneAI(aiFighter(), dt);
+  }
+
+  function update(dt) {
+    // pages23: 切空间 uses wall-clock so simSpeed / low FPS cannot stretch it past 4s.
+    if (voidSpace) {
+      var leftMs = voidUntil - performance.now();
+      voidT = Math.max(0, leftMs / 1000);
+      if (leftMs <= 0) {
+        voidSpace = false;
+        voidT = 0;
+        voidUntil = 0;
+        var oKitV = fighterByKit("obito");
+        if (oKitV && oKitV.phase > 3) oKitV.phase = 3;
+        if (oKitV) spawnFloater(oKitV.x, oKitV.y - 160, "返回", oKitV.palette.glow);
+      }
+    }
+    time += dt;
+    if (shake > 0) shake = Math.max(0, shake - dt * 18);
+
+    var roster = activeFighters();
+    var i;
+    for (i = 0; i < roster.length; i++) {
+      var f = roster[i];
+      if (f.hp <= 0) {
+        f.gait = "idle";
+        f.dashT = 0;
+        f.aiIx = 0;
+        f.aiIy = 0;
+        continue;
+      }
+      var sk;
+      for (sk in f.skills) {
+        if (f.skills[sk].cd > 0) f.skills[sk].cd = Math.max(0, f.skills[sk].cd - dt);
+      }
+      if (f.hyperArmor > 0) {
+        f.hyperArmor = Math.max(0, f.hyperArmor - dt);
+      }
+      if (f.chakraLock > 0) {
+        f.chakraLock = Math.max(0, f.chakraLock - dt);
+        f.chakra = f.maxChakra;
+      } else if (isTanjiro(f) && f.fireForm) {
+        f.chakra = Math.max(0, f.chakra - 8 * dt);
+        if (f.chakra <= 0) exitFireForm(f);
+      } else if (f.chakra < f.maxChakra) {
+        f.chakra = Math.min(f.maxChakra, f.chakra + 11.2 * dt);
+      }
+      if (isTanjiro(f) && (f.barrierT || 0) > 0) {
+        f.barrierT = Math.max(0, f.barrierT - dt);
+        if (f.barrierT <= 0 && !f.barrierUsed) {
+          f.barrierUsed = true;
+        }
+      }
+      if (isTanjiro(f) && (f.counterT || 0) > 0) {
+        f.counterT = Math.max(0, f.counterT - dt);
+        plantCaster(f);
+      }
+      if (f.flash > 0) f.flash = Math.max(0, f.flash - dt);
+      if (f.invuln > 0) f.invuln = Math.max(0, f.invuln - dt);
+      if (f.phase > 0) {
+        f.phaseEye = (f.phaseEye || 0) + dt;
+        f.phase = Math.max(0, f.phase - dt);
+        if (f.phase <= 0) f.phaseEye = 0;
+      }
+      if (f.armor > 0) {
+        f.armor -= dt;
+        if (f.armor <= 0) {
+          f.armor = 0;
+          if (f.skills.spike) applySkillCd(f, f.skills.spike, "spike");
+        }
+      }
+      if (f.pullOn) {
+        f.pullAnimT = (f.pullAnimT || 0) + dt;
+        if (f.pullAnimT >= pullActiveFrom && !f.pullApplied) applyPullGrab(f);
+        if (f.pullAnimT >= pullCastSpan) {
+          f.pullOn = false;
+          f.pullAnimT = pullCastSpan;
+          if (f.anim === "pull") { f.anim = "idle"; f.animT = 0; f.animDur = 0.2; }
+        }
+      }
+      if (f.pullFx > 0) f.pullFx = Math.max(0, f.pullFx - dt);
+      if (f.rooted > 0) {
+        f.rooted = Math.max(0, f.rooted - dt);
+        f.dashT = 0;
+      }
+      if (f.pullT > 0) {
+        var pullPrev = f.pullT;
+        f.pullT -= dt;
+        f.dashT = 0;
+        var pu = pullPrev > 0.0001 ? Math.min(1, dt / pullPrev) : 1;
+        var pulled = clampSpot(f.x + (f.pullToX - f.x) * pu, f.y + (f.pullToY - f.y) * pu);
+        f.x = pulled.x;
+        f.y = pulled.y;
+        if (f.pullT <= 0) {
+          f.pullT = 0;
+          var landed = clampSpot(f.pullToX, f.pullToY);
+          f.x = landed.x;
+          f.y = landed.y;
+          f.rooted = 1;
+          if (!f.pullHit) {
+            f.pullHit = true;
+            hurt(f, 14, "#cfe6ff");
+          }
+        }
+      }
+      if (f.repulseOn) f.repulseT = (f.repulseT || 0) + dt;
+      if (f.shieldWind > 0) {
+        f.shieldWind -= dt;
+        if (f.shieldWind <= 0) {
+          f.shieldWind = 0;
+          f.shield = f.shieldPlan || 1;
+          f.shieldDur = f.shield;
+          f.shieldHit = false;
+        }
+      }
+      if (f.shield > 0) {
+        f.shield -= dt;
+        var oppS = other(f);
+        var sc = shieldCenter(f);
+        var rad = shieldRadius();
+        var sdx = oppS.x - sc.x;
+        var sdy = (oppS.y - 80) - sc.y;
+        var sd = Math.sqrt(sdx * sdx + sdy * sdy);
+        if (sd < rad) {
+          var snx = sd > 0.01 ? sdx / sd : (f.facing || 1);
+          var sny = sd > 0.01 ? sdy / sd : 0;
+          var ox = sc.x + snx * (rad + 10);
+          var oy = sc.y + sny * (rad + 10) + 80;
+          var shoved = clampSpot(ox, oy);
+          oppS.x = shoved.x;
+          oppS.y = shoved.y;
+          if (!f.shieldHit) {
+            f.shieldHit = true;
+            hurt(oppS, 16, "#d7ecff");
+          }
+        } else {
+          f.shieldHit = false;
+        }
+        if (f.shield <= 0) {
+          f.shield = 0;
+          f.shieldKey = false;
+          f.repulseOn = false;
+          if (f.skills.spike) f.skills.spike.cd = f.skills.spike.max;
+        }
+      }
+      if (f.hurt > 0) f.hurt = Math.max(0, f.hurt - dt);
+      if (f.stun > 0) f.stun = Math.max(0, f.stun - dt);
+      if (f.busy > 0) f.busy = Math.max(0, f.busy - dt);
+      if (f.hitShake > 0) f.hitShake = Math.max(0, f.hitShake - dt);
+      if (f.barDmgT > 0) f.barDmgT = Math.max(0, f.barDmgT - dt);
+      if (f.hpChip == null) f.hpChip = f.hp;
+      if (f.chipHold > 0) f.chipHold = Math.max(0, f.chipHold - dt);
+      if (f.hpChip > f.hp) {
+        // pages21: white chip holds briefly, then drains slowly so it reads as white.
+        if (!(f.chipHold > 0)) f.hpChip = Math.max(f.hp, f.hpChip - f.maxHp * 0.3 * dt);
+      } else {
+        f.hpChip = f.hp;
+      }
+      if (f.knockPhase) f.knockT = (f.knockT || 0) + dt;
+      if (f.knockPhase === "down" && !isDowned(f) && !isAirborne(f)) {
+        f.knockPhase = null;
+        f.knockT = 0;
+      }
+
+      // Skill casters / Pain actions keep both feet on the ground.
+      if (f.pullOn || f.repulseOn || (f.shieldWind || 0) > 0) plantCaster(f);
+      if (isPain(f) && (f.busy > 0 || f.anim === "combo" || f.anim === "kick" || f.anim === "rod" || f.anim === "push" || f.anim === "back" || f.anim === "pull" || f.anim === "cast")) plantCaster(f);
+      if (isTanjiro(f) && (f.busy > 0 || (f.ult2Phase || 0) > 0 || (f.counterT || 0) > 0 || f.anim.indexOf("t_") === 0)) plantCaster(f);
+      if (isAirborne(f)) {
+        f.dashT = 0;
+        f.gait = "idle";
+        f.airV = (f.airV || 0) - LAUNCH_G * dt;
+        f.airH = (f.airH || 0) + f.airV * dt;
+        var flySpot = clampSpot(f.x + (f.launchVx || 0) * dt, f.y + (f.launchVy || 0) * dt);
+        f.x = flySpot.x;
+        f.y = flySpot.y;
+        // Soft drag so arc settles.
+        f.launchVx = (f.launchVx || 0) * Math.max(0, 1 - 0.35 * dt);
+        f.launchVy = (f.launchVy || 0) * Math.max(0, 1 - 0.35 * dt);
+        if (f.airH <= 0) {
+          landFighter(f);
+        } else {
+          // Stay invulnerable for the whole flight.
+          f.invuln = Math.max(f.invuln || 0, 0.05);
+        }
+        continue;
+      }
+
+      // Grounded light-hit slide.
+      if ((f.hitPushVx || 0) !== 0 || (f.hitPushVy || 0) !== 0) {
+        var pushSpot = clampSpot(f.x + (f.hitPushVx || 0) * dt, f.y + (f.hitPushVy || 0) * dt);
+        f.x = pushSpot.x;
+        f.y = pushSpot.y;
+        f.hitPushVx = (f.hitPushVx || 0) * Math.max(0, 1 - 9 * dt);
+        f.hitPushVy = (f.hitPushVy || 0) * Math.max(0, 1 - 9 * dt);
+        if (Math.abs(f.hitPushVx) < 4) f.hitPushVx = 0;
+        if (Math.abs(f.hitPushVy) < 4) f.hitPushVy = 0;
+      }
+
+      // Knockdown lie-down then get-up.
+      if ((f.downT || 0) > 0) {
+        f.downT -= dt;
+        f.dashT = 0;
+        f.gait = "idle";
+        f.invuln = Math.max(f.invuln || 0, 0.05);
+        f.stun = Math.max(f.stun || 0, 0.05);
+        if (f.downT <= 0) {
+          f.downT = 0;
+          f.downMax = 0;
+          f.getUpT = 0.52;
+          f.getUpMax = 0.52;
+        }
+        continue;
+      }
+      if ((f.getUpT || 0) > 0) {
+        f.getUpT -= dt;
+        f.dashT = 0;
+        f.gait = "idle";
+        f.invuln = Math.max(f.invuln || 0, 0.05);
+        f.stun = Math.max(f.stun || 0, 0.05);
+        if (f.getUpT <= 0) {
+          f.getUpT = 0;
+          f.getUpMax = 0;
+          f.hitLean = 0;
+          f.hitLight = false;
+          f.invuln = Math.max(f.invuln || 0, 0.12);
+        }
+        continue;
+      }
+
+      // Ease out light lean after stun ends.
+      if ((f.stun || 0) <= 0 && (f.hitLean || 0) > 0) {
+        f.hitLean = Math.max(0, f.hitLean - dt * 1.4);
+        if (f.hitLean <= 0.01) {
+          f.hitLean = 0;
+          f.hitLight = false;
+        }
+      }
+
+      if (f.dashT > 0) {
+        f.dashT -= dt;
+        if ((f.dashDelay || 0) > 0) {
+          f.dashDelay = Math.max(0, f.dashDelay - dt);
+          plantCaster(f);
+        } else {
+        var prevX = f.x;
+        var prevY = f.y;
+        var dashSpot = clampSpot(f.x + f.dashVx * dt, f.y + (f.dashVy || 0) * dt);
+        f.x = dashSpot.x;
+        f.y = dashSpot.y;
+        if (!f.dashHit && !koId) {
+          var opp = other(f);
+          var abx = f.x - prevX;
+          var aby = f.y - prevY;
+          var apx = opp.x - prevX;
+          var apy = opp.y - prevY;
+          var ab2 = abx * abx + aby * aby;
+          var t = ab2 > 0.0001 ? (apx * abx + apy * aby) / ab2 : 0;
+          if (t < 0) t = 0;
+          if (t > 1) t = 1;
+          var cx = prevX + abx * t;
+          var cy = prevY + aby * t;
+          if (planarDist(opp.x, opp.y, cx, cy) < 48) {
+            if (hurt(opp, f.dashDmg || 16, f.palette.glow, { attacker: f })) f.dashHit = true;
+          }
+        }
+        }
+        if (f.dashT <= 0) {
+          f.dashT = 0;
+          f.dashDelay = 0;
+          f.dashDmg = 0;
+          if (f.anim === "t_water4") { /* keep anim until animDur */ }
+          else f.anim = "idle";
+        }
+      } else {
+        if (!koId && f.busy <= 0) walkFighter(f, dt);
+        else if (!koId && f.anim === "punch" && f.animT < f.animDur * 0.45) {
+          var lunge = clampSpot(f.x + f.facing * 560 * dt, f.y);
+          f.x = lunge.x;
+          f.y = lunge.y;
+        }
+        if (f.anim !== "idle") {
+        f.animT += dt;
+        if (f.anim === "tele" && !f.teleBlinked && f.animT >= f.animDur * 0.5) {
+          blinkStrike(f);
+          f.teleBlinked = true;
+        }
+        if (f.anim === "t_water1" && !f.water1Blink && f.animT >= (f.water1At || 0)) {
+          f.water1Blink = true;
+          var spot1 = clampSpot(f.x + f.facing * tanjiroBodyW, f.y);
+          ghosts.push({ x: f.x, y: f.y, facing: f.facing, life: 0.25, max: 0.25, palette: f.palette, weapon: f.weapon, owner: f.id, kit: f.kit });
+          f.x = spot1.x;
+          f.y = spot1.y;
+          f.facing = -f.facing;
+          plantCaster(f);
+        }
+        if (f.anim === "t_ult1" && f.pendingFireForm && f.animT >= 0.4) {
+          enterFireForm(f);
+        }
+        if ((f.ult2Phase || 0) > 0 && f.anim === "t_ult2") {
+          f.ult2T = (f.ult2T || 0) + dt;
+          updateTanjiroUlt2(f, dt);
+        }
+        if (f.hitPending && f.animT >= f.hitAt) {
+          f.hitPending = false;
+          if (f.anim === "combo") spawnComboFlash(f);
+          if (f.anim === "kick") spawnKickBurst(f);
+          resolveMelee(f);
+        }
+        if (f.hitPending2 && f.animT >= f.hitAt2) {
+          f.hitPending2 = false;
+          if (f.anim === "combo") spawnComboFlash(f);
+          resolveMelee(f);
+        }
+        if (f.animT >= f.animDur) {
+          if (f.anim === "t_ult2") {
+            exitFireForm(f);
+            f.ult2Phase = 0;
+          }
+          f.anim = "idle";
+        }
+        }
+      }
+    }
+
+    if (koId == null) {
+      var sep = activeFighters();
+      var a, b, sdx, sdy, ad, push, nx, ny, ls, rs;
+      for (a = 0; a < sep.length; a++) {
+        if (sep[a].hp <= 0 || sep[a].dashT > 0 || isAirborne(sep[a])) continue;
+        for (b = a + 1; b < sep.length; b++) {
+          if (sep[b].hp <= 0 || sep[b].dashT > 0 || isAirborne(sep[b])) continue;
+          sdx = sep[b].x - sep[a].x;
+          sdy = sep[b].y - sep[a].y;
+          ad = Math.sqrt(sdx * sdx + sdy * sdy);
+          if (ad < 46 && ad > 0.01) {
+            push = (46 - ad) * 0.5;
+            nx = sdx / ad;
+            ny = sdy / ad;
+            ls = clampSpot(sep[a].x - nx * push, sep[a].y - ny * push);
+            rs = clampSpot(sep[b].x + nx * push, sep[b].y + ny * push);
+            sep[a].x = ls.x;
+            sep[a].y = ls.y;
+            sep[b].x = rs.x;
+            sep[b].y = rs.y;
+          }
+        }
+      }
+    }
+
+    for (i = projectiles.length - 1; i >= 0; i--) {
+      var p = projectiles[i];
+      p.life -= dt;
+      if (p.kind === "firebreath") {
+        p.age = (p.age || 0) + dt;
+        var ownerFb = projectileOwner(p.owner);
+        var dirFb = ownerFb.facing < 0 ? -1 : 1;
+        p.facing = ownerFb.facing;
+        // Keep the flame tip glued to Obito's mouth.
+        p.x = ownerFb.x + dirFb * 26;
+        p.y = ownerFb.y - 118;
+        var targetFb = projectileFoe(p.owner, p.x + dirFb * 200, p.y);
+        var prog = p.age / 1.6;
+        if (prog > 1) prog = 1;
+        // Reach grows as the stream extends; scaled to half with the smaller VFX.
+        var reach = 110 + 350 * Math.min(1, prog / 0.35);
+        var midX = p.x + dirFb * reach * 0.52;
+        var midY = p.y + 18;
+        var halfW = reach * 0.48;
+        var halfH = 55 + 20 * Math.min(1, prog / 0.4);
+        var inBeam = Math.abs(targetFb.x - midX) < halfW && Math.abs((targetFb.y - 74) - midY) < halfH;
+        if (inBeam && !p.hit && prog > 0.12) {
+          if (targetFb.phase > 0 || targetFb.invuln > 0) {
+            /* phased: breath passes through */
+          } else if (hurt(targetFb, p.dmg, ownerFb.palette.glow, { attacker: ownerFb })) {
+            p.hit = true;
+            rings.push({ x: targetFb.x, y: targetFb.y, life: 0.28, max: 0.28, color: "#ff8a3a" });
+          }
+        }
+        if (p.life <= 0) projectiles.splice(i, 1);
+        continue;
+      }
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      if (p.kind === "fire") {
+        p.age = (p.age || 0) + dt;
+        var u = p.age / 0.2;
+        if (u > 1) u = 1;
+        u = 1 - (1 - u) * (1 - u);
+        p.scale = 0.28 + 2.495 * u;
+      }
+      var ownerProj = projectileOwner(p.owner);
+      var enemiesHit = livingEnemies(ownerProj);
+      var ei;
+      var hitAny = false;
+      for (ei = 0; ei < enemiesHit.length; ei++) {
+        var target = enemiesHit[ei];
+        var chestY = target.y - (p.kind === "fire" ? 78 : 74);
+        var hitR = p.kind === "fire" ? 28 * (p.scale || 0.28) : (p.kind === "push" ? 46 : (p.kind === "rod" ? 22 : (p.kind === "wave" ? 28 : 20)));
+        if (planarDist(p.x, p.y, target.x, chestY) < hitR) {
+          if (target.phase > 0 || target.invuln > 0) {
+            /* ethereal: projectile passes through and is not a hit */
+          } else if (hurt(target, p.dmg, ownerProj.palette.glow, { attacker: ownerProj })) {
+            if (p.kind === "push") {
+              var away = p.vx < 0 ? -1 : 1;
+              var shoved = clampSpot(target.x + away * 110, target.y);
+              target.x = shoved.x;
+              target.y = shoved.y;
+            }
+            if (p.kind === "fire") {
+              rings.push({ x: target.x, y: target.y, life: 0.25, max: 0.25, color: "#ff8a3a" });
+            }
+            hitAny = true;
+            break;
+          }
+        }
+      }
+      if (hitAny) {
+        projectiles.splice(i, 1);
+        continue;
+      }
+      if (p.life <= 0 || p.x < -60 || p.x > W + 60 || p.y < 80 || p.y > H + 40) projectiles.splice(i, 1);
+    }
+
+    for (i = swords.length - 1; i >= 0; i--) {
+      var sw = swords[i];
+      var px0 = sw.x;
+      var py0 = sw.y;
+      sw.life -= dt;
+      sw.x += sw.vx * dt;
+      sw.y += sw.vy * dt;
+      if (!sw.hit) {
+        var swordOwner = projectileOwner(sw.owner || "R");
+        var foes = livingEnemies(swordOwner);
+        var fi;
+        var abx = sw.x - px0;
+        var aby = sw.y - py0;
+        for (fi = 0; fi < foes.length; fi++) {
+          var foe = foes[fi];
+          var apx = foe.x - px0;
+          var apy = (foe.y - 74) - py0;
+          var ab2 = abx * abx + aby * aby;
+          var tt = ab2 > 0.0001 ? (apx * abx + apy * aby) / ab2 : 0;
+          if (tt < 0) tt = 0;
+          if (tt > 1) tt = 1;
+          if (planarDist(foe.x, foe.y - 74, px0 + abx * tt, py0 + aby * tt) < 48) {
+            if (foe.phase > 0 || foe.invuln > 0) {
+              /* phased: the sword passes through and is not a hit */
+            } else {
+              hurt(foe, 23, "#ffe56a");
+              sw.hit = true;
+              break;
+            }
+          }
+        }
+      }
+      if (sw.life <= 0 || sw.x < -120 || sw.x > W + 120 || sw.y < -120 || sw.y > H + 120) swords.splice(i, 1);
+    }
+
+    for (i = spikes.length - 1; i >= 0; i--) {
+      var s = spikes[i];
+      s.t += dt;
+      if (!s.done && s.t >= s.delay) {
+        s.done = true;
+        var spikeOwner = projectileOwner(s.owner);
+        var spikeVictims = livingEnemies(spikeOwner);
+        var svi;
+        for (svi = 0; svi < spikeVictims.length; svi++) {
+          var victim = spikeVictims[svi];
+          if (planarDist(victim.x, victim.y, s.x, s.y) <= s.radius + 10) {
+            if (victim.phase <= 0 && victim.invuln <= 0) hurt(victim, s.dmg, s.glow);
+          }
+        }
+      }
+      if (s.t > s.delay + 0.42) spikes.splice(i, 1);
+    }
+
+    for (i = ghosts.length - 1; i >= 0; i--) {
+      ghosts[i].life -= dt;
+      if (ghosts[i].life <= 0) ghosts.splice(i, 1);
+    }
+    for (i = rings.length - 1; i >= 0; i--) {
+      rings[i].life -= dt;
+      if (rings[i].life <= 0) rings.splice(i, 1);
+    }
+    for (i = wheels.length - 1; i >= 0; i--) {
+      wheels[i].life -= dt;
+      if (wheels[i].life <= 0) wheels.splice(i, 1);
+    }
+    for (i = bursts.length - 1; i >= 0; i--) {
+      bursts[i].life -= dt;
+      if (bursts[i].life <= 0) bursts.splice(i, 1);
+    }
+    for (i = sparks.length - 1; i >= 0; i--) {
+      var sp = sparks[i];
+      sp.life -= dt;
+      sp.x += sp.vx * dt;
+      sp.y += sp.vy * dt;
+      sp.vy += 420 * dt;
+      if (sp.life <= 0) sparks.splice(i, 1);
+    }
+    for (i = floaters.length - 1; i >= 0; i--) {
+      floaters[i].life -= dt;
+      floaters[i].y -= 42 * dt;
+      if (floaters[i].life <= 0) floaters.splice(i, 1);
+    }
+  }
+
+  function roundRect(x, y, w, h, r) {
+    var rr = Math.min(r, w * 0.5, h * 0.5);
+    ctx.beginPath();
+    ctx.moveTo(x + rr, y);
+    ctx.arcTo(x + w, y, x + w, y + h, rr);
+    ctx.arcTo(x + w, y + h, x, y + h, rr);
+    ctx.arcTo(x, y + h, x, y, rr);
+    ctx.arcTo(x, y, x + w, y, rr);
+    ctx.closePath();
+  }
+
+  function drawPine(x, y, sc) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(sc, sc);
+    ctx.fillStyle = "rgba(0,0,0,0.2)";
+    ctx.beginPath();
+    ctx.ellipse(0, 2, 16, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#3d3428";
+    ctx.fillRect(-3, -18, 6, 20);
+    ctx.fillStyle = "#2f4634";
+    ctx.beginPath();
+    ctx.moveTo(0, -78);
+    ctx.lineTo(26, -20);
+    ctx.lineTo(-26, -20);
+    ctx.fill();
+    ctx.fillStyle = "#3e5a42";
+    ctx.beginPath();
+    ctx.moveTo(0, -58);
+    ctx.lineTo(20, -8);
+    ctx.lineTo(-20, -8);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawLantern(x, y, sc) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(sc, sc);
+    ctx.fillStyle = "rgba(0,0,0,0.22)";
+    ctx.beginPath();
+    ctx.ellipse(0, 2, 12, 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#6d6256";
+    ctx.fillRect(-8, -8, 16, 8);
+    ctx.fillRect(-3, -28, 6, 22);
+    ctx.fillStyle = "#f0c56a";
+    ctx.fillRect(-7, -40, 14, 12);
+    ctx.fillStyle = "#8a8176";
+    ctx.beginPath();
+    ctx.moveTo(-11, -42);
+    ctx.lineTo(0, -54);
+    ctx.lineTo(11, -42);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawStage() {
+    if (voidSpace) {
+      ctx.fillStyle = "#07080d";
+      ctx.fillRect(0, 0, W, H);
+      var vg = ctx.createLinearGradient(0, 0, 0, H);
+      vg.addColorStop(0, "#10131a");
+      vg.addColorStop(1, "#07080c");
+      ctx.fillStyle = vg;
+      ctx.fillRect(0, 0, W, H);
+      // Ground band aligned with the normal playable Y (430–680), not a thin strip.
+      ctx.strokeStyle = "rgba(214, 222, 232, 0.55)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(36, 560);
+      ctx.lineTo(W - 36, 560);
+      ctx.stroke();
+      ctx.fillStyle = "#12151c";
+      ctx.fillRect(0, 562, W, H - 562);
+      return;
+    }
+    if (arenaImg.complete && arenaImg.naturalWidth > 0) {
+      // Slight overscan so edges feel full without shifting the ground line.
+      var zoom = 1.06;
+      var dw = W * zoom;
+      var dh = H * zoom;
+      var dx = (W - dw) / 2;
+      var dy = (H - dh) / 2 + 6;
+      ctx.drawImage(arenaImg, dx, dy, dw, dh);
+    } else {
+      ctx.fillStyle = "#6d583c";
+      ctx.fillRect(0, 0, W, H);
+    }
+    // Soft side fill + vignette (keep ground readable).
+    var sideL = ctx.createLinearGradient(0, 0, 90, 0);
+    sideL.addColorStop(0, "rgba(8,10,14,0.55)");
+    sideL.addColorStop(1, "rgba(8,10,14,0)");
+    ctx.fillStyle = sideL;
+    ctx.fillRect(0, 0, 110, H);
+    var sideR = ctx.createLinearGradient(W, 0, W - 90, 0);
+    sideR.addColorStop(0, "rgba(8,10,14,0.55)");
+    sideR.addColorStop(1, "rgba(8,10,14,0)");
+    ctx.fillStyle = sideR;
+    ctx.fillRect(W - 110, 0, 110, H);
+    var vig = ctx.createRadialGradient(W / 2, H * 0.42, H * 0.2, W / 2, H * 0.5, H * 0.78);
+    vig.addColorStop(0, "rgba(0,0,0,0)");
+    vig.addColorStop(0.72, "rgba(0,0,0,0.08)");
+    vig.addColorStop(1, "rgba(0,0,0,0.42)");
+    ctx.fillStyle = vig;
+    ctx.fillRect(0, 0, W, H);
+    var topShade = ctx.createLinearGradient(0, 0, 0, 120);
+    topShade.addColorStop(0, "rgba(6,8,12,0.45)");
+    topShade.addColorStop(1, "rgba(6,8,12,0)");
+    ctx.fillStyle = topShade;
+    ctx.fillRect(0, 0, W, 130);
+  }
+
+  function drawHumanoid(x, groundY, facing, palette, weapon, anim, animT, animDur, flash, alpha, hurt, shade) {
+    var sc = 2;
+    if (shade) {
+      alpha *= 0.55;
+      palette = { body: "#2a2d33", trim: "#8b949e", glow: "#b7c0c8", deep: "#14161a", hot: "#9aa3ab" };
+    }
+    ctx.save();
+    ctx.translate(x, groundY);
+    ctx.scale(facing * sc, sc);
+    ctx.globalAlpha = alpha;
+    var bob = anim === "dash" ? 0 : Math.sin(time * 2.6 + x * 0.01) * 2.2;
+    var lean = 0;
+    var arm = -0.4;
+    var thrust = 0;
+    var slash = 0;
+    if (anim === "slash") {
+      var u = clamp(animT / animDur, 0, 1);
+      slash = Math.sin(u * Math.PI);
+      arm = lerp(-1.4, 0.9, u);
+      lean = slash * 6;
+    } else if (anim === "thrust") {
+      var u2 = clamp(animT / animDur, 0, 1);
+      thrust = Math.sin(Math.min(1, u2 * 1.3) * Math.PI);
+      arm = -0.05;
+      lean = thrust * 10;
+    } else if (anim === "dash") {
+      lean = 14;
+      arm = -0.8;
+    } else if (anim === "cast") {
+      arm = -1.05;
+      lean = 4;
+    } else if (anim === "blink" || anim === "swap") {
+      bob -= 6;
+    }
+    if (hurt > 0) lean -= 6;
+
+    ctx.translate(lean, bob);
+
+    var skin = flash > 0 ? "#f4fbff" : palette.hot;
+    var cloth = flash > 0 ? "#ffffff" : palette.body;
+    var edge = flash > 0 ? "#ffffff" : palette.trim;
+
+    ctx.strokeStyle = edge;
+    ctx.lineWidth = 4;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(-8, -46);
+    ctx.lineTo(-12, -18);
+    ctx.moveTo(6, -46);
+    ctx.lineTo(10 + (anim === "dash" ? 8 : 0), -16);
+    ctx.stroke();
+
+    ctx.fillStyle = cloth;
+    roundRect(-16, -104, 32, 60, 8);
+    ctx.fill();
+    ctx.strokeStyle = edge;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.fillStyle = flash > 0 ? "#ffffff" : palette.deep;
+    ctx.fillRect(-10, -96, 20, 8);
+
+    ctx.fillStyle = skin;
+    ctx.beginPath();
+    ctx.arc(2, -118, 13, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = edge;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    if (weapon === "blade") {
+      ctx.fillStyle = edge;
+      ctx.beginPath();
+      ctx.moveTo(-4, -128);
+      ctx.lineTo(10, -122);
+      ctx.lineTo(-2, -112);
+      ctx.fill();
+    } else {
+      ctx.strokeStyle = edge;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(-8, -132);
+      ctx.lineTo(0, -120);
+      ctx.lineTo(8, -132);
+      ctx.stroke();
+    }
+
+    ctx.save();
+    ctx.translate(8, -86);
+    ctx.rotate(arm);
+    ctx.strokeStyle = skin;
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(26, 6);
+    ctx.stroke();
+
+    if (weapon === "blade") {
+      ctx.translate(26, 6);
+      ctx.rotate(-0.6 + slash * 0.2);
+      ctx.fillStyle = flash > 0 ? "#ffffff" : palette.glow;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.quadraticCurveTo(28, -16, 46, 4);
+      ctx.quadraticCurveTo(24, 8, 0, 6);
+      ctx.fill();
+      if (slash > 0.15) {
+        ctx.globalAlpha = alpha * slash;
+        ctx.strokeStyle = palette.glow;
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(6, -4, 34 + slash * 10, -1.3, 0.95);
+        ctx.stroke();
+      }
+    } else {
+      ctx.translate(26, 6);
+      var ext = 18 + thrust * 62;
+      ctx.strokeStyle = flash > 0 ? "#ffffff" : palette.trim;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(-6, 0);
+      ctx.lineTo(ext, 0);
+      ctx.stroke();
+      ctx.fillStyle = flash > 0 ? "#ffffff" : palette.glow;
+      ctx.beginPath();
+      ctx.moveTo(ext, 0);
+      ctx.lineTo(ext - 12, -5);
+      ctx.lineTo(ext - 12, 5);
+      ctx.fill();
+      if (thrust > 0.2) {
+        ctx.globalAlpha = alpha * thrust * 0.8;
+        ctx.strokeStyle = palette.glow;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(8, -3);
+        ctx.lineTo(ext - 8, -3);
+        ctx.moveTo(8, 3);
+        ctx.lineTo(ext - 8, 3);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+    if (shade) {
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, alpha * 1.15);
+      ctx.strokeStyle = "rgba(226,232,238,0.9)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(2, -118, 16, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      roundRect(-18, -108, 36, 64, 10);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    ctx.restore();
+  }
+
+  function drawVoidArmor(f) {
+    var sc = 2;
+    ctx.save();
+    ctx.translate(f.x, f.y);
+    ctx.scale((f.facing < 0 ? -1 : 1) * sc, sc);
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+
+    ctx.globalAlpha = 0.55;
+    ctx.fillStyle = "#5b2e96";
+    ctx.beginPath();
+    ctx.moveTo(-18, -148);
+    ctx.lineTo(-78, -214);
+    ctx.lineTo(-36, -168);
+    ctx.lineTo(-62, -186);
+    ctx.lineTo(-8, -142);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.globalAlpha = 0.62;
+    ctx.fillStyle = "#7c46c4";
+    ctx.beginPath();
+    ctx.moveTo(6, -28);
+    ctx.quadraticCurveTo(78, -55, 52, -148);
+    ctx.quadraticCurveTo(28, -196, -36, -168);
+    ctx.quadraticCurveTo(-62, -110, -18, -28);
+    ctx.closePath();
+    ctx.fill();
+    ctx.globalAlpha = 0.8;
+    ctx.strokeStyle = "rgba(42, 12, 72, 0.55)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    var rib;
+    ctx.strokeStyle = "rgba(232, 206, 255, 0.45)";
+    ctx.lineWidth = 2;
+    for (rib = 0; rib < 7; rib++) {
+      var yy = -48 - rib * 15;
+      ctx.beginPath();
+      ctx.moveTo(-30, yy + 4);
+      ctx.quadraticCurveTo(8, yy - 10, 46, yy + 2);
+      ctx.stroke();
+    }
+
+    ctx.globalAlpha = 0.72;
+    ctx.fillStyle = "#9460dc";
+    ctx.beginPath();
+    ctx.ellipse(-6, -158, 54, 24, -0.35, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(40, 10, 70, 0.45)";
+    ctx.stroke();
+
+    ctx.strokeStyle = "#6a38b0";
+    ctx.globalAlpha = 0.8;
+    ctx.lineWidth = 18;
+    ctx.beginPath();
+    ctx.moveTo(18, -132);
+    ctx.quadraticCurveTo(78, -118, 108, -86);
+    ctx.stroke();
+    ctx.lineWidth = 14;
+    ctx.beginPath();
+    ctx.moveTo(108, -86);
+    ctx.lineTo(146, -62);
+    ctx.stroke();
+    ctx.fillStyle = "#a56ee6";
+    ctx.beginPath();
+    ctx.arc(154, -56, 12, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255, 220, 90, 0.85)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(120, -78);
+    ctx.lineTo(168, -48);
+    ctx.stroke();
+
+    ctx.globalAlpha = 0.84;
+    ctx.fillStyle = "#8d58d4";
+    ctx.beginPath();
+    ctx.moveTo(-6, -178);
+    ctx.quadraticCurveTo(8, -214, 40, -192);
+    ctx.quadraticCurveTo(64, -178, 52, -158);
+    ctx.lineTo(28, -150);
+    ctx.quadraticCurveTo(4, -156, -10, -168);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "#ffe14a";
+    ctx.beginPath();
+    ctx.ellipse(24, -182, 7, 4, -0.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#3a2200";
+    ctx.beginPath();
+    ctx.arc(26, -182, 2.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = "#3a1868";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(34, -164);
+    ctx.lineTo(50, -158);
+    ctx.stroke();
+
+    ctx.strokeStyle = "rgba(110, 62, 186, 0.8)";
+    ctx.lineWidth = 16;
+    ctx.beginPath();
+    ctx.moveTo(-6, -30);
+    ctx.lineTo(-14, -2);
+    ctx.moveTo(18, -30);
+    ctx.lineTo(26, 0);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function obitoImage(set, index) {
+    if (!set || !set.length) return null;
+    var i = index % set.length;
+    if (i < 0) i += set.length;
+    var img = set[i];
+    if (!img || !img.complete || !img.naturalWidth) return null;
+    return img;
+  }
+
+  function drawObitoAt(x, groundY, facing, set, index, alpha, phased, footDrop, tilt, shakeAmp) {
+    var img = obitoImage(set, index);
+    if (!img) return;
+    var sc = obitoScale;
+    var sx = 0;
+    var sy = 0;
+    if (shakeAmp && shakeAmp > 0) {
+      sx = (Math.random() * 2 - 1) * shakeAmp * 5;
+      sy = (Math.random() * 2 - 1) * shakeAmp * 2.5;
+      sc = sc * (1 - Math.min(0.08, shakeAmp * 0.35));
+    }
+    var dw = img.width * sc;
+    var dh = img.height * sc;
+    ctx.save();
+    ctx.translate(x + sx, groundY + 2 + (footDrop || 0) + sy);
+    if (tilt) ctx.rotate(tilt);
+    ctx.scale(facing < 0 ? -1 : 1, 1);
+    ctx.globalAlpha = alpha;
+    // 虚化 keeps the normal colours; only alpha (set by the caller) makes it see-through.
+    ctx.drawImage(img, -dw / 2, -dh, dw, dh);
+    ctx.restore();
+  }
+
+  function drawSharingan(f, bodyH) {
+    if (!sharinganImg.complete || sharinganImg.naturalWidth <= 0) return;
+    var size = bodyH * 1.4;
+    ctx.save();
+    ctx.translate(f.x, f.y + 2 - bodyH * 0.5);
+    ctx.rotate(time * Math.PI * 4);
+    ctx.drawImage(sharinganImg, -size / 2, -size / 2, size, size);
+    ctx.restore();
+  }
+
+  function drawObito(f) {
+    var set = obito.idle;
+    var idx = 0;
+    var alpha = 1;
+    var reacting = isAirborne(f) || isDowned(f) || ((f.stun || 0) > 0 && f.hitLight);
+    if ((f.knockPhase === "air" || isAirborne(f)) && obito.knock && obito.knock[0] && obito.knock[0].complete) {
+      set = obito.knock;
+      idx = Math.min(10, Math.floor((f.knockT || 0) * 18));
+    } else if ((f.knockPhase === "down" || isDowned(f)) && obito.knock && obito.knock[0] && obito.knock[0].complete) {
+      set = obito.knock;
+      var kt = f.knockT || 0;
+      if (kt < 0.12) idx = 11;
+      else if (kt < 0.28) idx = 12;
+      else if (kt < 0.45) idx = 13;
+      else if (kt < 0.65) idx = 14;
+      else idx = 15;
+    } else if (reacting) {
+      set = obito.idle;
+      idx = 0;
+    } else if (f.anim === "tele") {
+      set = obito.tele;
+      var half = f.animDur * 0.5;
+      var tu = f.teleBlinked ? (f.animT - half) / half : f.animT / half;
+      if (tu < 0) tu = 0;
+      if (tu > 0.999) tu = 0.999;
+      idx = (f.teleBlinked ? 4 : 0) + Math.floor(tu * 4);
+    } else if (f.anim === "punch" || f.anim === "breath") {
+      if (f.anim === "punch") set = obito.punch;
+      else set = obito.breath;
+      var u = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (u < 0) u = 0;
+      if (u > 0.999) u = 0.999;
+      idx = Math.floor(u * 8);
+    } else if (f.gait === "run" || f.gait === "walk") {
+      set = obito.run;
+      idx = Math.floor(time * 11) % 8;
+    } else {
+      set = obito.idle;
+      idx = 0;
+      if (obito.cloth[0] && obito.cloth[0].complete && obito.cloth[0].naturalWidth > 0) {
+        set = obito.cloth;
+        idx = Math.floor(time * clothFps) % 12;
+      }
+    }
+    var phased = f.phase > 0;
+    if (phased) alpha = 0.45;
+    else if (f.anim !== "tele" && f.invuln > 0 && !isDowned(f) && !isAirborne(f) && Math.sin(time * 40) > 0) alpha *= 0.45;
+    if (phased && phaseSlow > 0) {
+      var bodyFrame = obitoImage(set, idx);
+      var bodyH = bodyFrame ? bodyFrame.height * obitoScale : 280;
+      drawSharingan(f, bodyH);
+    }
+    var footDrop = 0;
+    if (set === obito.tele) {
+      var pad = teleFootPad[idx];
+      if (pad == null) pad = obitoIdleFootPad;
+      footDrop = (pad - obitoIdleFootPad) * obitoScale;
+    } else if (set === obito.idle) {
+      var ipad = obitoIdleFootPads[idx];
+      if (ipad == null) ipad = obitoIdleFootPads[0];
+      footDrop = (ipad - obitoIdleFootPads[0]) * obitoScale;
+    }
+    drawObitoAt(f.x, f.y - (f.airH || 0), f.facing, set, idx, alpha, phased, footDrop, fighterDrawTilt(f), f.hitShake || 0);
+  }
+
+  function drawGroundShadow(f) {
+    var body = isObito(f) ? obitoScale : (isTanjiro(f) ? tanjiroScale * 1.15 : painScale);
+    var lunging = f.anim === "punch" || f.anim === "tele" || f.anim === "breath" || f.anim === "thrust" || f.anim === "cleave" || f.anim === "slash" || f.anim === "dash" || f.anim === "swap" || f.anim === "combo" || f.anim === "kick" || f.anim === "rod" || f.anim === "push" || f.anim === "back" || (f.anim && f.anim.indexOf("t_") === 0);
+    var rx = 32;
+    var ry = 9;
+    var ox = 0;
+    if (lunging || f.gait === "run") {
+      rx = 56;
+      ry = 6;
+      ox = 14;
+    } else if (f.gait === "walk") {
+      rx = 42;
+      ry = 8;
+      ox = 6;
+    }
+    if (isDowned(f)) {
+      rx = 58;
+      ry = 7;
+      ox = 0;
+    }
+    var lift = f.airH || 0;
+    var shrink = 1 / (1 + lift * 0.004);
+    ctx.save();
+    ctx.translate(f.x, f.y + 4);
+    ctx.scale(f.facing < 0 ? -1 : 1, 1);
+    ctx.scale(body * shrink, body * shrink);
+    ctx.globalAlpha = 0.38 * shrink;
+    ctx.fillStyle = "rgba(0,0,0,1)";
+    ctx.beginPath();
+    ctx.ellipse(ox, 0, rx, ry, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function painImage(set, index) {
+    if (!set || !set.length) return null;
+    var i = index % set.length;
+    if (i < 0) i += set.length;
+    var img = set[i];
+    if (!img || !img.complete || !img.naturalWidth) return null;
+    return img;
+  }
+
+  function drawPainRepulse(x, groundY, facing, index, alpha) {
+    var img = painImage(pain.repulse, index);
+    if (!img) return false;
+    var dw = img.width * repulseScale;
+    var dh = img.height * repulseScale;
+    var y = groundY + 2 + painFootDrop - painIdleFootPad * painScale + repulseFootPad * repulseScale;
+    ctx.save();
+    ctx.translate(x, y);
+    // Pain art faces left; flip when facing right (opposite of Obito).
+    ctx.scale(facing < 0 ? 1 : -1, 1);
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(img, -dw / 2, -dh, dw, dh);
+    ctx.restore();
+    return true;
+  }
+
+  function drawPainPullCast(x, groundY, facing, index, alpha) {
+    var img = painImage(pain.pullCast, index);
+    if (!img) return false;
+    var dw = img.width * pullCastScale;
+    var dh = img.height * pullCastScale;
+    var y = groundY + 2 + painFootDrop - painIdleFootPad * painScale + pullCastFootPad * pullCastScale;
+    ctx.save();
+    ctx.translate(x, y);
+    // Cast sheet faces right (same as push/attack strips).
+    ctx.scale(facing < 0 ? -1 : 1, 1);
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(img, -dw / 2, -dh, dw, dh);
+    ctx.restore();
+    return true;
+  }
+
+  // Native facing of each pain strip: idle (and the repulse sheet) is drawn facing
+  // left, while run/walk/dash/back and the attack strips are drawn facing right.
+  function painNativeLeft(set) {
+    return set === pain.idle || set === pain.turn || set === pain.cloth;
+  }
+
+  function drawPainAt(x, groundY, facing, set, index, alpha, footDrop, tilt, shakeAmp) {
+    var img = painImage(set, index);
+    if (!img) return;
+    var sc = painScale / painFrameScale;
+    var sx = 0;
+    var sy = 0;
+    if (shakeAmp && shakeAmp > 0) {
+      sx = (Math.random() * 2 - 1) * shakeAmp * 5;
+      sy = (Math.random() * 2 - 1) * shakeAmp * 2.5;
+      sc = sc * (1 - Math.min(0.08, shakeAmp * 0.35));
+    }
+    var dw = img.width * sc;
+    var dh = img.height * sc;
+    ctx.save();
+    ctx.translate(x + sx, groundY + 2 + painFootDrop + (footDrop || 0) + sy);
+    if (tilt) ctx.rotate(tilt);
+    // Flip so the art always looks along `facing` (-1 left, 1 right).
+    var nativeDir = painNativeLeft(set) ? -1 : 1;
+    ctx.scale((facing < 0 ? -1 : 1) * nativeDir, 1);
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(img, -dw / 2, -dh, dw, dh);
+    ctx.restore();
+  }
+
+  function drawPain(f) {
+    if (f.pullOn && !isAirborne(f) && !isDowned(f) && !(f.hitLight && (f.stun || 0) > 0)) {
+      var pidx = Math.floor((f.pullAnimT || 0) * pullCastFps);
+      if (pidx < 0) pidx = 0;
+      if (pidx > 23) pidx = 23;
+      if (drawPainPullCast(f.x, f.y, f.facing, pidx, 1)) return;
+    }
+    if (f.repulseOn && !isAirborne(f) && !isDowned(f) && !(f.hitLight && (f.stun || 0) > 0)) {
+      var last = f.repulseLong === false ? 11 : 19;
+      var ridx = Math.floor((f.repulseT || 0) * repulseFps);
+      if (ridx < 0) ridx = 0;
+      if (ridx > last) ridx = last;
+      if (drawPainRepulse(f.x, f.y, f.facing, ridx, 1)) return;
+    }
+    var set = pain.idle;
+    var idx = 0;
+    var alpha = 1;
+    if ((f.downT || 0) > 0) {
+      set = pain.land;
+      idx = Math.min(5, 3 + Math.floor((0.72 - Math.max(0, f.downT)) / 0.72 * 3));
+    } else if ((f.getUpT || 0) > 0 && (f.getUpMax || 0) > 0) {
+      set = pain.land;
+      var gu = f.getUpT / f.getUpMax;
+      idx = Math.min(5, Math.floor(gu * 4));
+    } else if (isAirborne(f)) {
+      set = pain.jump;
+      var ju = (f.airH || 0) / 220;
+      if (ju > 0.999) ju = 0.999;
+      idx = Math.min(5, Math.floor(ju * 6));
+    } else if (f.hitLight && (f.stun || 0) > 0) {
+      set = pain.back;
+      var bu = 1 - Math.min(1, (f.stun || 0) / 0.55);
+      idx = Math.min(5, Math.floor(bu * 4));
+    } else if (f.anim === "combo" || f.anim === "kick" || f.anim === "rod" || f.anim === "push" || f.anim === "back" || f.anim === "pull") {
+      if (f.anim === "combo") set = pain.combo;
+      else if (f.anim === "kick") set = pain.kick;
+      else if (f.anim === "rod") set = pain.rod;
+      else if (f.anim === "push") set = pain.push;
+      else if (f.anim === "pull") set = pain.push;
+      else set = pain.back;
+      var u = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (u < 0) u = 0;
+      if (u > 0.999) u = 0.999;
+      idx = Math.floor(u * 6);
+    } else if (f.gait === "run" || f.gait === "walk") {
+      set = pain.run;
+      idx = Math.floor(time * 11) % 6;
+    } else {
+      set = pain.idle;
+      idx = 0;
+      if (pain.cloth[0] && pain.cloth[0].complete && pain.cloth[0].naturalWidth > 0) {
+        set = pain.cloth;
+        idx = Math.floor(time * clothFps) % 12;
+      }
+    }
+    if (f.invuln > 0 && !isDowned(f) && !isAirborne(f) && Math.sin(time * 40) > 0) alpha *= 0.45;
+    var footDrop = 0;
+    var padKey = null;
+    if (set === pain.idle) padKey = "idle";
+    else if (set === pain.cloth) padKey = "cloth";
+    else if (set === pain.walk) padKey = "walk";
+    else if (set === pain.run) padKey = "run";
+    else if (set === pain.dash) padKey = "dash";
+    else if (set === pain.back) padKey = "back";
+    else if (set === pain.combo) padKey = "combo";
+    else if (set === pain.kick) padKey = "kick";
+    else if (set === pain.rod) padKey = "rod";
+    else if (set === pain.push) padKey = "push";
+    else if (set === pain.turn) padKey = "turn";
+    else if (set === pain.land) padKey = "land";
+    else if (set === pain.jump) padKey = "jump";
+    if (padKey && painFootPads[padKey]) {
+      var ppad = painFootPads[padKey][idx];
+      if (ppad == null) ppad = painFootPads[padKey][0];
+      footDrop = (ppad - 21) * painScale / painFrameScale;
+    }
+    // Pain skills/actions: never float on airH
+    var drawAir = (f.airH || 0);
+    if (f.pullOn || f.repulseOn || f.busy > 0 || f.anim === "combo" || f.anim === "kick" || f.anim === "rod" || f.anim === "push" || f.anim === "back" || f.anim === "pull") drawAir = 0;
+    drawPainAt(f.x, f.y - drawAir, f.facing, set, idx, alpha, footDrop, fighterDrawTilt(f), f.hitShake || 0);
+  }
+
+  function drawHyperArmorAura(f) {
+    if (!(f.hyperArmor > 0)) return;
+    var t = time || 0;
+    var pulse = 0.55 + 0.45 * Math.sin(t * 8);
+    var ax = f.x;
+    var ay = f.y - 70 - (f.airH || 0);
+    ctx.save();
+    ctx.globalAlpha = 0.28 + 0.18 * pulse;
+    ctx.strokeStyle = "#ff7a30";
+    ctx.lineWidth = 4;
+    ctx.shadowColor = "#ff9040";
+    ctx.shadowBlur = 18;
+    ctx.beginPath();
+    ctx.ellipse(ax, ay, 52 + pulse * 6, 78 + pulse * 4, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 0.16 + 0.1 * pulse;
+    ctx.fillStyle = "rgba(255,110,40,0.25)";
+    ctx.beginPath();
+    ctx.ellipse(ax, ay, 40, 64, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+
+  function tanjiroImage(set, index) {
+    if (!set || !set.length) return null;
+    var i = index % set.length;
+    if (i < 0) i += set.length;
+    var img = set[i];
+    if (!img || !img.complete || !img.naturalWidth) return null;
+    return img;
+  }
+  function drawTanjiroAt(x, groundY, facing, set, index, alpha, tilt, shakeAmp) {
+    var img = tanjiroImage(set, index);
+    if (!img) return;
+    var sc = tanjiroScale;
+    var sx = 0;
+    var sy = 0;
+    if (shakeAmp && shakeAmp > 0) {
+      sx = (Math.random() * 2 - 1) * shakeAmp * 5;
+      sy = (Math.random() * 2 - 1) * shakeAmp * 2.5;
+      sc = sc * (1 - Math.min(0.08, shakeAmp * 0.35));
+    }
+    var dw = img.width * sc;
+    var dh = img.height * sc;
+    // Plant soles: source foot line ~20px above PNG bottom.
+    var y = groundY + 2 + tanjiroFootPad * sc;
+    ctx.save();
+    ctx.translate(x + sx, y + sy);
+    if (tilt) ctx.rotate(tilt);
+    // Art faces RIGHT (same as Obito).
+    ctx.scale(facing < 0 ? -1 : 1, 1);
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(img, -dw / 2, -dh, dw, dh);
+    ctx.restore();
+  }
+  function drawTanjiroBarrier(f) {
+    if (!(f.barrierT > 0) || f.barrierUsed) return;
+    var r = tanjiroBodyW * 0.8;
+    var h = tanjiroBodyH * 1.6;
+    var pulse = 0.55 + 0.45 * Math.sin(time * 10);
+    ctx.save();
+    ctx.translate(f.x, f.y - h * 0.42);
+    ctx.globalAlpha = 0.22 + 0.16 * pulse;
+    ctx.strokeStyle = "#5ee0d0";
+    ctx.lineWidth = 3;
+    ctx.shadowColor = "#7af0e0";
+    ctx.shadowBlur = 16;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, r, h * 0.5, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 0.12 + 0.08 * pulse;
+    ctx.fillStyle = "rgba(80,220,210,0.35)";
+    ctx.beginPath();
+    ctx.ellipse(0, 0, r * 0.85, h * 0.42, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+  function drawTanjiro(f) {
+    drawTanjiroBarrier(f);
+    var set = tanjiro.idle;
+    var idx = 0;
+    var alpha = 1;
+    var form = tanjiroSet(f);
+    var reacting = isAirborne(f) || isDowned(f) || ((f.stun || 0) > 0 && f.hitLight);
+    if (reacting) {
+      set = tanjiro.idle;
+      idx = 0;
+    } else if (f.anim === "t_atk") {
+      set = form.atk;
+      var u = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (u < 0) u = 0; if (u > 0.999) u = 0.999;
+      idx = Math.min(5, Math.floor(u * 6));
+    } else if (f.anim === "t_water2") {
+      set = form.water2;
+      var u2 = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (u2 < 0) u2 = 0; if (u2 > 0.999) u2 = 0.999;
+      idx = Math.min(5, Math.floor(u2 * 6));
+    } else if (f.anim === "t_counter") {
+      set = form.water2c;
+      var uc = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (uc < 0) uc = 0; if (uc > 0.999) uc = 0.999;
+      idx = Math.min(5, Math.floor(uc * 6));
+    } else if (f.anim === "t_water4") {
+      set = form.water4;
+      var u4 = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (u4 < 0) u4 = 0; if (u4 > 0.999) u4 = 0.999;
+      idx = Math.min(5, Math.floor(u4 * 6));
+    } else if (f.anim === "t_water1") {
+      set = form.water1;
+      var u1 = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (u1 < 0) u1 = 0; if (u1 > 0.999) u1 = 0.999;
+      idx = Math.min(5, Math.floor(u1 * 6));
+    } else if (f.anim === "t_ult1") {
+      set = tanjiro.ult1;
+      var uu = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (uu < 0) uu = 0; if (uu > 0.999) uu = 0.999;
+      idx = Math.min(5, Math.floor(uu * 6));
+    } else if (f.anim === "t_ult2") {
+      set = tanjiro.ult2;
+      var u7 = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (u7 < 0) u7 = 0; if (u7 > 0.999) u7 = 0.999;
+      idx = Math.min(5, Math.floor(u7 * 6));
+    } else if (f.gait === "run" || f.gait === "walk") {
+      set = tanjiro.idle;
+      idx = Math.floor(time * 10) % 8;
+    } else {
+      set = tanjiro.idle;
+      idx = Math.floor(time * 8) % 8;
+    }
+    if (f.invuln > 0 && !isDowned(f) && !isAirborne(f) && Math.sin(time * 40) > 0) alpha *= 0.45;
+    if (f.fireForm) {
+      // soft fire tint aura under sprite
+      ctx.save();
+      ctx.globalAlpha = 0.18;
+      ctx.fillStyle = "#ff6a3a";
+      ctx.beginPath();
+      ctx.ellipse(f.x, f.y - tanjiroBodyH * 0.45, 36, 58, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+    var drawAir = (f.airH || 0);
+    if (f.busy > 0 || (f.ult2Phase || 0) > 0 || (f.counterT || 0) > 0 || (f.anim && f.anim.indexOf("t_") === 0)) drawAir = 0;
+    drawTanjiroAt(f.x, f.y - drawAir, f.facing, set, idx, alpha, fighterDrawTilt(f), f.hitShake || 0);
+  }
+
+  function drawFighter(f) {
+    drawGroundShadow(f);
+    drawHyperArmorAura(f);
+    if (isObito(f)) {
+      drawObito(f);
+      return;
+    }
+    if (isTanjiro(f)) {
+      drawTanjiro(f);
+      return;
+    }
+    drawPain(f);
+  }
+
+  function drawEnergySword(sw) {
+    ctx.save();
+    ctx.translate(sw.x, sw.y);
+    ctx.rotate(Math.atan2(sw.vy, sw.vx || 0.001));
+    ctx.fillStyle = "rgba(168, 96, 255, 0.35)";
+    ctx.beginPath();
+    ctx.moveTo(-78, 0);
+    ctx.lineTo(8, -8);
+    ctx.lineTo(8, 8);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "#fff6c2";
+    ctx.beginPath();
+    ctx.moveTo(-6, -2.5);
+    ctx.lineTo(62, 0);
+    ctx.lineTo(-6, 2.5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "#ffe14a";
+    ctx.fillRect(-4, -1.2, 36, 2.4);
+    ctx.restore();
+  }
+
+  function drawGhost(g) {
+    var a = Math.max(0, g.life / g.max) * (g.alpha || 0.45);
+    if (g.kit === "obito" || (!g.kit && g.owner === "L")) {
+      drawObitoAt(g.x, g.y, g.facing, obito.idle, 0, a);
+      return;
+    }
+    if (g.kit === "tanjiro") {
+      drawTanjiroAt(g.x, g.y, g.facing, tanjiro.idle, 0, a, 0, 0);
+      return;
+    }
+    if (g.kit === "pain" || (!g.kit && g.owner === "R")) {
+      drawPainAt(g.x, g.y, g.facing, pain.idle, 0, a);
+      return;
+    }
+    drawHumanoid(g.x, g.y, g.facing, g.palette, g.weapon, "blink", 0, 1, 0, a, 0);
+  }
+
+  function drawOneProjectile(p) {
+      if (p.kind === "firebreath") {
+        var fbFrames = obito.firebreath;
+        var fps = p.fps || 20;
+        var fi = Math.floor((p.age || 0) * fps);
+        if (fi < 0) fi = 0;
+        if (fi >= fbFrames.length) fi = fbFrames.length - 1;
+        var fbImg = fbFrames[fi];
+        if (fbImg && fbImg.complete && fbImg.naturalWidth > 0) {
+          var scb = p.drawScale || 1.1;
+          var dwb = fbImg.naturalWidth * scb;
+          var dhb = fbImg.naturalHeight * scb;
+          var face = (p.facing != null ? p.facing : 1);
+          ctx.save();
+          ctx.translate(p.x, p.y);
+          ctx.scale(face < 0 ? -1 : 1, 1);
+          // Left tip of the art is the mouth anchor. No fillRect border — frames are pre-keyed.
+          ctx.globalCompositeOperation = "source-over";
+          ctx.drawImage(fbImg, 0, -dhb * 0.45, dwb, dhb);
+          ctx.restore();
+        }
+        return;
+      }
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(Math.atan2(p.vy || 0, p.vx || 0.001));
+      if (p.kind === "fire") ctx.scale(p.scale || 1, p.scale || 1);
+      if (p.kind === "rod") {
+        // Thin black rod: much narrower body, slightly shorter length.
+        ctx.globalAlpha = 0.3;
+        ctx.fillStyle = "#f2f6ff";
+        ctx.fillRect(-68, -2.2, 104, 4.4);
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = "#f4f7ff";
+        ctx.fillRect(-58, -2.6, 96, 5.2);
+        ctx.fillStyle = "#2a2a2e";
+        ctx.fillRect(-54, -1.8, 90, 3.6);
+        ctx.fillStyle = "#8d93a3";
+        ctx.fillRect(-54, -0.55, 90, 1.1);
+        ctx.fillStyle = "#111216";
+        ctx.beginPath();
+        ctx.moveTo(46, 0);
+        ctx.lineTo(36, -2.4);
+        ctx.lineTo(36, 2.4);
+        ctx.fill();
+        ctx.fillStyle = "#111216";
+        ctx.beginPath();
+        ctx.moveTo(-54, 0);
+        ctx.lineTo(-46, -2.2);
+        ctx.lineTo(-46, 2.2);
+        ctx.fill();
+      } else if (p.kind === "push") {
+        ctx.strokeStyle = "rgba(230, 230, 240, 0.9)";
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(0, 0, 26, -1.2, 1.2);
+        ctx.stroke();
+        ctx.strokeStyle = "rgba(180, 170, 255, 0.55)";
+        ctx.beginPath();
+        ctx.arc(-10, 0, 18, -1, 1);
+        ctx.stroke();
+      } else if (p.kind === "wave") {
+        ctx.strokeStyle = "#7af7ff";
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(0, 0, 18, -1.2, 1.2);
+        ctx.stroke();
+        ctx.strokeStyle = "rgba(122,247,255,0.45)";
+        ctx.beginPath();
+        ctx.arc(-8, 0, 12, -1, 1);
+        ctx.stroke();
+      } else if (p.kind === "needle") {
+        ctx.strokeStyle = "rgba(122,247,255,0.35)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(-26, 0);
+        ctx.lineTo(0, 0);
+        ctx.stroke();
+        ctx.fillStyle = "#e9ffff";
+        ctx.fillRect(0, -1.5, 18, 3);
+        ctx.fillStyle = "#3ef0e0";
+        ctx.beginPath();
+        ctx.moveTo(18, 0);
+        ctx.lineTo(10, -3.5);
+        ctx.lineTo(10, 3.5);
+        ctx.fill();
+      } else {
+        var seed = p.seed || 0;
+        var flick = 0.72 + 0.28 * Math.sin(time * 32 + seed);
+        var flick2 = 0.65 + 0.35 * Math.sin(time * 47 + seed * 1.7);
+        var tail = 62 * flick;
+        var glow = ctx.createRadialGradient(10, 0, 2, 6, 0, 40);
+        glow.addColorStop(0, "rgba(255, 230, 120, 0.55)");
+        glow.addColorStop(0.45, "rgba(255, 120, 20, 0.28)");
+        glow.addColorStop(1, "rgba(255, 60, 0, 0)");
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.ellipse(-6, 0, 48, 28, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "rgba(255, 110, 16, 0.92)";
+        ctx.beginPath();
+        ctx.moveTo(8, -12);
+        ctx.lineTo(-tail * 0.45, -16 * flick2);
+        ctx.lineTo(-tail, -5 * flick);
+        ctx.lineTo(-tail * 0.62, 1);
+        ctx.lineTo(-tail * 0.92, 9 * flick2);
+        ctx.lineTo(-tail * 0.35, 14 * flick);
+        ctx.lineTo(6, 13);
+        ctx.closePath();
+        ctx.fill();
+        var k;
+        ctx.fillStyle = "rgba(255, 150, 30, 0.88)";
+        for (k = 0; k < 3; k++) {
+          var wob = Math.sin(time * 36 + seed + k * 2.2);
+          var tx = -16 - k * 16 * flick;
+          var ty = (k - 1) * 8 * wob;
+          ctx.beginPath();
+          ctx.moveTo(tx + 14, ty - 2);
+          ctx.lineTo(tx - 12 * flick2, ty - 7 - wob * 4);
+          ctx.lineTo(tx - 4, ty + 6 + wob * 2);
+          ctx.closePath();
+          ctx.fill();
+        }
+        var body = ctx.createRadialGradient(8, 0, 2, 4, 0, 24);
+        body.addColorStop(0, "#ffb43a");
+        body.addColorStop(0.5, "#ff6410");
+        body.addColorStop(1, "rgba(180, 30, 0, 0.05)");
+        ctx.fillStyle = body;
+        ctx.beginPath();
+        ctx.ellipse(6, 0, 24, 15 * (0.88 + 0.12 * flick), 0, 0, Math.PI * 2);
+        ctx.fill();
+        var core = ctx.createRadialGradient(16, 0, 1, 14, 0, 14);
+        core.addColorStop(0, "#fffef6");
+        core.addColorStop(0.35, "#ffe14a");
+        core.addColorStop(1, "rgba(255, 150, 20, 0)");
+        ctx.fillStyle = core;
+        ctx.beginPath();
+        ctx.ellipse(14, 0, 13, 8, 0, 0, Math.PI * 2);
+        ctx.fill();
+        for (k = 0; k < 4; k++) {
+          var e = Math.sin(time * 24 + seed * 3 + k * 1.4);
+          var ex = -30 - k * 13 - e * 5;
+          var ey = Math.cos(time * 19 + k * 1.8) * (5 + k * 2.4);
+          ctx.globalAlpha = 0.45 + 0.5 * Math.abs(e);
+          ctx.fillStyle = k % 2 === 0 ? "#ffd15a" : "#ff8a1e";
+          ctx.beginPath();
+          ctx.ellipse(ex, ey, 2.4 + (k % 2) * 1.6, 1.8, e * 0.4, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      ctx.restore();
+  }
+
+  function drawSpikes() {
+    var i, k;
+    for (i = 0; i < spikes.length; i++) {
+      var s = spikes[i];
+      var warn = s.t < s.delay;
+      var grow = warn ? 0 : clamp((s.t - s.delay) / 0.08, 0, 1);
+      var fade = warn ? 1 : 1 - clamp((s.t - s.delay) / 0.42, 0, 1);
+      ctx.save();
+      ctx.globalAlpha = (warn ? 0.85 : fade);
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = 2;
+      var sy = s.y;
+      ctx.beginPath();
+      ctx.ellipse(s.x, sy, s.radius, 14, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      if (warn) {
+        var pulse = 0.5 + 0.5 * Math.sin(time * 18);
+        ctx.globalAlpha = 0.25 + pulse * 0.25;
+        ctx.fillStyle = s.color;
+        ctx.beginPath();
+        ctx.ellipse(s.x, sy, s.radius * (0.35 + 0.65 * (s.t / s.delay)), 12, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      if (!warn) {
+        ctx.globalAlpha = fade;
+        for (k = -1; k <= 1; k++) {
+          var h = (k === 0 ? 78 : 52) * grow;
+          var bx = s.x + k * 18;
+          ctx.fillStyle = k === 0 ? s.glow : s.color;
+          ctx.beginPath();
+          ctx.moveTo(bx - 8, sy);
+          ctx.lineTo(bx, sy - h);
+          ctx.lineTo(bx + 8, sy);
+          ctx.closePath();
+          ctx.fill();
+        }
+      }
+      ctx.restore();
+    }
+  }
+
+  function drawWheels() {
+    var i, k;
+    for (i = 0; i < wheels.length; i++) {
+      var w = wheels[i];
+      var fade = w.life < 0.35 ? w.life / 0.35 : 1;
+      ctx.save();
+      ctx.translate(w.x, w.y - 86);
+      ctx.rotate(w.spin + (w.max - w.life) * 7.5);
+      ctx.globalAlpha = 0.9 * fade;
+      ctx.strokeStyle = "#e02020";
+      ctx.fillStyle = "rgba(180, 16, 16, 0.18)";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(0, 0, 50, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(0, 0, 16, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.lineWidth = 2;
+      for (k = 0; k < 8; k++) {
+        var a = k * Math.PI / 4;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(a) * 16, Math.sin(a) * 16);
+        ctx.lineTo(Math.cos(a) * 50, Math.sin(a) * 50);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+  }
+
+  function drawBursts() {
+    var i;
+    for (i = 0; i < bursts.length; i++) {
+      var b = bursts[i];
+      var u = 1 - b.life / b.max;
+      ctx.save();
+      ctx.translate(b.x, b.y);
+      if (b.kind === "flash") {
+        ctx.scale(b.facing < 0 ? -1 : 1, 1);
+        ctx.globalAlpha = Math.max(0, b.life / b.max);
+        ctx.fillStyle = "rgba(255, 244, 210, 0.95)";
+        ctx.beginPath();
+        ctx.moveTo(-10, 0);
+        ctx.lineTo(54 + u * 26, -16 - u * 8);
+        ctx.lineTo(36, 0);
+        ctx.lineTo(54 + u * 26, 16 + u * 8);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = "rgba(255, 150, 60, 0.85)";
+        ctx.beginPath();
+        ctx.moveTo(-4, 0);
+        ctx.lineTo(28, -7);
+        ctx.lineTo(18, 0);
+        ctx.lineTo(28, 7);
+        ctx.closePath();
+        ctx.fill();
+      } else if (b.kind === "impact") {
+        var sc = b.scale || 1;
+        ctx.scale(sc, sc);
+        ctx.globalAlpha = Math.max(0, b.life / b.max);
+        var glow = ctx.createRadialGradient(0, 0, 2, 0, 0, 56 + u * 40);
+        glow.addColorStop(0, "rgba(255,255,255,0.95)");
+        glow.addColorStop(0.25, "rgba(255,220,120,0.85)");
+        glow.addColorStop(0.55, "rgba(255,90,40,0.45)");
+        glow.addColorStop(1, "rgba(255,40,20,0)");
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(0, 0, 56 + u * 40, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "rgba(255,246,210,0.95)";
+        ctx.lineWidth = 3.5;
+        var k;
+        for (k = 0; k < 10; k++) {
+          var a = k * Math.PI / 5 + u * 0.6;
+          var inner = 6 + u * 8;
+          var outer = 34 + u * 52;
+          ctx.beginPath();
+          ctx.moveTo(Math.cos(a) * inner, Math.sin(a) * inner);
+          ctx.lineTo(Math.cos(a) * outer, Math.sin(a) * outer);
+          ctx.stroke();
+        }
+        ctx.fillStyle = "rgba(255,250,230,0.9)";
+        ctx.beginPath();
+        ctx.arc(0, 0, 10 + u * 10, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.globalAlpha = Math.max(0, b.life / b.max);
+        ctx.strokeStyle = "#fff6d8";
+        ctx.fillStyle = "rgba(255, 186, 80, 0.8)";
+        ctx.lineWidth = 3;
+        var k;
+        for (k = 0; k < 8; k++) {
+          var a = k * Math.PI / 4 + 0.2;
+          var inner = 8 + u * 6;
+          var outer = 28 + u * 46;
+          ctx.beginPath();
+          ctx.moveTo(Math.cos(a) * inner, Math.sin(a) * inner);
+          ctx.lineTo(Math.cos(a) * outer, Math.sin(a) * outer);
+          ctx.stroke();
+        }
+        ctx.beginPath();
+        ctx.arc(0, 0, 10 + u * 16, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+  }
+
+  function traceShield(rx, ry, spin, scale) {
+    var steps = 48;
+    var i;
+    ctx.beginPath();
+    for (i = 0; i <= steps; i++) {
+      var a = (i / steps) * Math.PI * 2;
+      var w = shieldWave(a, spin) * scale;
+      var x = Math.cos(a) * rx * w;
+      var y = Math.sin(a) * ry * w;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+  }
+
+  function traceStreak(rx, ry, spin, scale, from, span) {
+    var steps = 18;
+    var i;
+    ctx.beginPath();
+    for (i = 0; i <= steps; i++) {
+      var t = i / steps;
+      var a = from + span * t;
+      var w = shieldWave(a, spin * 0.35) * scale * (0.72 + 0.28 * Math.sin(t * Math.PI));
+      var x = Math.cos(a) * rx * w;
+      var y = Math.sin(a) * ry * w;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+  }
+
+  function drawAirShield(f) {
+    if (!(f.shield > 0)) return;
+    var r = shieldRadius();
+    var c = shieldCenter(f);
+    var fade = f.shield < 0.25 ? f.shield / 0.25 : 1;
+    ctx.save();
+    ctx.translate(c.x, c.y);
+    var glow = ctx.createRadialGradient(-r * 0.2, -r * 0.28, r * 0.08, 0, 0, r);
+    glow.addColorStop(0, "rgba(255, 255, 255, 0.42)");
+    glow.addColorStop(0.35, "rgba(186, 216, 255, 0.22)");
+    glow.addColorStop(1, "rgba(120, 170, 220, 0.02)");
+    ctx.globalAlpha = fade;
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 0.85 * fade;
+    ctx.strokeStyle = "rgba(236, 246, 255, 0.95)";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 0.55 * fade;
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(-r * 0.08, -r * 0.1, r * 0.72, Math.PI * 1.15, Math.PI * 1.85);
+    ctx.stroke();
+    ctx.restore();
+    ctx.save();
+    ctx.globalAlpha = 0.8 * fade;
+    ctx.strokeStyle = "rgba(226, 240, 255, 0.95)";
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.ellipse(f.x, f.y, r * 1.42, r * 0.2, 0, 0.15, Math.PI - 0.15);
+    ctx.stroke();
+    ctx.globalAlpha = 0.28 * fade;
+    ctx.fillStyle = "rgba(190, 220, 255, 0.9)";
+    ctx.beginPath();
+    ctx.ellipse(f.x, f.y + 2, r * 1.2, r * 0.11, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawPullStreams(f) {
+    if (!(f.pullOn || f.pullFx > 0)) return;
+    var frames = pain.pullFx;
+    if (!frames || !frames.length) return;
+    var tAnim = f.pullOn ? (f.pullAnimT || 0) : Math.max(0, pullCastSpan - (f.pullFx || 0));
+    var fi = Math.floor(tAnim * pullCastFps);
+    if (fi < 0) fi = 0;
+    if (fi > 23) fi = 23;
+    var img = painImage(frames, fi);
+    if (!img) return;
+    var palm = palmOf(f);
+    var ax = palm.x;
+    var ay = palm.y;
+    if (fi < 8) {
+      ax = f.x + f.facing * 56 * painScale;
+      ay = f.y - 100 * painScale;
+    }
+    var dw = img.width * pullFxScale;
+    var dh = img.height * pullFxScale;
+    var fade = 1;
+    if (!f.pullOn && f.pullFx > 0) fade = Math.min(1, f.pullFx / 0.25);
+    ctx.save();
+    ctx.translate(ax, ay);
+    ctx.scale(f.facing < 0 ? -1 : 1, 1);
+    ctx.globalAlpha = fade;
+    ctx.globalCompositeOperation = "source-over";
+    ctx.drawImage(img, -dw / 2, -dh / 2, dw, dh);
+    ctx.restore();
+  }
+
+  function drawRings() {
+    var i;
+    for (i = 0; i < rings.length; i++) {
+      var r = rings[i];
+      var u = 1 - r.life / r.max;
+      ctx.save();
+      ctx.globalAlpha = r.life / r.max;
+      ctx.strokeStyle = r.color;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.ellipse(r.x, r.y, 18 + u * 70, 8 + u * 16, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  function drawSparks() {
+    var i;
+    for (i = 0; i < sparks.length; i++) {
+      var s = sparks[i];
+      var sz = s.size || 3;
+      ctx.globalAlpha = Math.max(0, s.life / s.max);
+      ctx.fillStyle = s.color;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, sz * 0.55, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillRect(s.x - sz * 0.2, s.y - sz, sz * 0.4, sz * 2);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawHp(f) {
+    var w = 92;
+    var h = 8;
+    var x = f.x - w / 2;
+    var depth = (f.y - MIN_Y) / (MAX_Y - MIN_Y);
+    var y = f.y - 150 * (0.78 + depth * 0.3);
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    roundRect(x - 1, y - 1, w + 2, h + 2, 3);
+    ctx.fill();
+    var ratio = f.hp / f.maxHp;
+    ctx.fillStyle = ratio > 0.35 ? f.palette.trim : "#ff4d6a";
+    roundRect(x, y, Math.max(0, w * ratio), h, 3);
+    ctx.fill();
+    ctx.font = "12px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillStyle = f.palette.glow;
+    ctx.fillText(f.name, f.x, y - 6);
+    ctx.textAlign = "left";
+  }
+
+  function drawFloaters() {
+    ctx.textAlign = "center";
+    ctx.font = "bold 20px sans-serif";
+    var i;
+    for (i = 0; i < floaters.length; i++) {
+      var t = floaters[i];
+      ctx.globalAlpha = Math.max(0, t.life / t.max);
+      ctx.fillStyle = t.color;
+      ctx.fillText(t.text, t.x, t.y);
+    }
+    ctx.globalAlpha = 1;
+    ctx.textAlign = "left";
+  }
+
+  function icon(id, cx, cy, color) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = 2;
+    ctx.lineCap = "round";
+    if (id === "punch" || id === "slash") {
+      ctx.beginPath();
+      ctx.arc(0, 4, 14, Math.PI * 0.9, Math.PI * 2.15);
+      ctx.stroke();
+    } else if (id === "phase" || id === "needle") {
+      ctx.beginPath();
+      ctx.arc(0, 0, 11, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(0, 0, 3, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(-11, 0);
+      ctx.lineTo(11, 0);
+      ctx.moveTo(0, -11);
+      ctx.lineTo(0, 11);
+      ctx.stroke();
+    } else if (id === "tele" || id === "back") {
+      ctx.beginPath();
+      ctx.moveTo(-10, -7);
+      ctx.lineTo(8, 0);
+      ctx.lineTo(-10, 7);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(4, 0);
+      ctx.lineTo(14, 0);
+      ctx.stroke();
+    } else if (id === "space" || id === "dash") {
+      ctx.strokeRect(-12, -8, 10, 16);
+      ctx.strokeRect(2, -8, 10, 16);
+    } else if (id === "thrust") {
+      ctx.beginPath();
+      ctx.moveTo(-14, 0);
+      ctx.lineTo(8, 0);
+      ctx.moveTo(14, 0);
+      ctx.lineTo(4, -5);
+      ctx.lineTo(4, 5);
+      ctx.fill();
+    } else if (id === "breath" || id === "fire") {
+      ctx.beginPath();
+      ctx.arc(0, 2, 8, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 0.45;
+      ctx.beginPath();
+      ctx.arc(-6, 2, 6, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (id === "swap") {
+      ctx.beginPath();
+      ctx.arc(-6, 0, 7, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(2, -6);
+      ctx.lineTo(12, 0);
+      ctx.lineTo(2, 6);
+      ctx.stroke();
+    } else if (id === "pull") {
+      ctx.beginPath();
+      ctx.moveTo(-12, -6);
+      ctx.lineTo(2, -6);
+      ctx.moveTo(-12, 6);
+      ctx.lineTo(2, 6);
+      ctx.moveTo(6, 0);
+      ctx.lineTo(-2, -5);
+      ctx.moveTo(6, 0);
+      ctx.lineTo(-2, 5);
+      ctx.stroke();
+    } else if (id === "spike") {
+      ctx.beginPath();
+      ctx.arc(0, 0, 11, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(0, 0, 11, time * 6, time * 6 + 1.4);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(0, 0, 6, -time * 8, -time * 8 + 2);
+      ctx.stroke();
+    } else if (id === "wave") {
+      ctx.beginPath();
+      ctx.arc(2, 0, 10, -1.2, 1.2);
+      ctx.stroke();
+    } else if (id === "cleave") {
+      ctx.beginPath();
+      ctx.moveTo(-12, 6);
+      ctx.quadraticCurveTo(0, -12, 12, 4);
+      ctx.stroke();
+    } else if (id === "atk") {
+      ctx.beginPath();
+      ctx.moveTo(-10, 8);
+      ctx.lineTo(2, -10);
+      ctx.lineTo(6, -6);
+      ctx.lineTo(-6, 12);
+      ctx.closePath();
+      ctx.stroke();
+    } else if (id === "water2") {
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 8, 12, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(-6, 4);
+      ctx.quadraticCurveTo(0, -2, 6, 4);
+      ctx.stroke();
+    } else if (id === "water4") {
+      ctx.beginPath();
+      ctx.moveTo(-12, 0);
+      ctx.lineTo(10, 0);
+      ctx.moveTo(4, -6);
+      ctx.lineTo(12, 0);
+      ctx.lineTo(4, 6);
+      ctx.stroke();
+    } else if (id === "water1") {
+      ctx.beginPath();
+      ctx.arc(0, 0, 11, 0.2, Math.PI * 1.6);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(8, -8);
+      ctx.lineTo(2, 2);
+      ctx.stroke();
+    } else if (id === "ult1") {
+      ctx.beginPath();
+      ctx.arc(0, 2, 7, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(0, -12);
+      ctx.lineTo(4, -2);
+      ctx.lineTo(-4, -2);
+      ctx.closePath();
+      ctx.fill();
+    } else if (id === "ult2") {
+      ctx.beginPath();
+      ctx.moveTo(-12, -4);
+      ctx.lineTo(12, -4);
+      ctx.moveTo(-12, 4);
+      ctx.lineTo(12, 4);
+      ctx.moveTo(-4, -8);
+      ctx.lineTo(8, 0);
+      ctx.lineTo(-4, 8);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawButton(x, y, w, h, f, id) {
+    var sk = f.skills[id];
+    var ready = sk.cd <= 0 && !koId && matchState === "fight";
+    var p = f.palette;
+    ctx.save();
+    roundRect(x, y, w, h, 10);
+    ctx.fillStyle = ready ? "rgba(8,10,16,0.82)" : "rgba(8,10,16,0.72)";
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = ready ? p.trim : "rgba(140,140,150,0.35)";
+    ctx.stroke();
+
+    ctx.font = "bold 13px sans-serif";
+    ctx.textAlign = "left";
+    ctx.fillStyle = ready ? p.glow : "rgba(180,180,190,0.45)";
+    roundRect(x + 8, y + 8, 22, 18, 4);
+    ctx.fillStyle = ready ? p.deep : "#1a1c22";
+    ctx.fill();
+    ctx.strokeStyle = ready ? p.trim : "rgba(140,140,150,0.3)";
+    ctx.stroke();
+    ctx.fillStyle = ready ? p.glow : "rgba(170,170,180,0.4)";
+    ctx.fillText(sk.key, x + 13, y + 21);
+
+    icon(id, x + w * 0.62, y + 30, ready ? p.glow : "rgba(160,160,170,0.35)");
+
+    ctx.font = "bold 15px sans-serif";
+    ctx.fillStyle = ready ? "#f2f6f8" : "rgba(200,200,208,0.4)";
+    ctx.fillText(sk.name, x + 10, y + h - 22);
+    ctx.font = "11px sans-serif";
+    ctx.fillStyle = ready ? p.trim : "rgba(160,160,170,0.35)";
+    ctx.fillText(sk.role, x + 10, y + h - 8);
+
+    if (sk.cd > 0) {
+      var ratio = sk.cd / sk.max;
+      ctx.beginPath();
+      roundRect(x, y, w, h, 10);
+      ctx.clip();
+      ctx.beginPath();
+      ctx.moveTo(x + w / 2, y + h / 2);
+      ctx.arc(x + w / 2, y + h / 2, 90, -Math.PI / 2, -Math.PI / 2 + ratio * Math.PI * 2);
+      ctx.closePath();
+      ctx.fillStyle = "rgba(0,0,0,0.5)";
+      ctx.fill();
+      ctx.font = "bold 14px sans-serif";
+      ctx.textAlign = "right";
+      ctx.fillStyle = "rgba(255,255,255,0.85)";
+      ctx.fillText(sk.cd.toFixed(1), x + w - 8, y + 22);
+    }
+    ctx.restore();
+  }
+
+  function addHit(x, y, w, h, fn) {
+    hudHits.push({ x: x, y: y, w: w, h: h, fn: fn });
+  }
+
+  function drawPortrait(cx, cy, f) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, 32, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(8,10,16,0.92)";
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = f.palette.glow;
+    ctx.shadowColor = f.palette.glow;
+    ctx.shadowBlur = 12;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 26, 0, Math.PI * 2);
+    ctx.save();
+    ctx.clip();
+    var pimg = portraitImgs[f.kit];
+    if (pimg && pimg.complete && pimg.naturalWidth > 0) {
+      ctx.drawImage(pimg, cx - 26, cy - 26, 52, 52);
+    } else {
+      var g = ctx.createRadialGradient(cx - 6, cy - 8, 4, cx, cy, 26);
+      g.addColorStop(0, f.palette.hot);
+      g.addColorStop(0.55, f.palette.body);
+      g.addColorStop(1, f.palette.deep);
+      ctx.fillStyle = g;
+      ctx.fill();
+    }
+    ctx.restore();
+    ctx.beginPath();
+    ctx.arc(cx, cy, 26, 0, Math.PI * 2);
+    ctx.strokeStyle = "rgba(255,255,255,0.18)";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawResourceBars(x, y, w, f, fromRight) {
+    var hx = fromRight ? x - w : x;
+    var hh = 16;
+    ctx.save();
+    ctx.fillStyle = "rgba(10,6,8,0.82)";
+    roundRect(hx - 2, y - 2, w + 4, hh + 4, 5);
+    ctx.fill();
+    ctx.fillStyle = "rgba(48, 10, 10, 0.95)";
+    roundRect(hx, y, w, hh, 4);
+    ctx.fill();
+    var chipRatio = f.maxHp > 0 ? (f.hpChip != null ? f.hpChip : f.hp) / f.maxHp : 0;
+    var ratio = f.maxHp > 0 ? f.hp / f.maxHp : 0;
+    var cwChip = Math.max(0, w * chipRatio);
+    var hw = Math.max(0, w * ratio);
+    if (cwChip > hw + 0.5) {
+      ctx.fillStyle = "#ffffff";
+      if (fromRight) roundRect(hx + w - cwChip, y, cwChip, hh, 4);
+      else roundRect(hx, y, cwChip, hh, 4);
+      ctx.fill();
+    }
+    if (hw > 0) {
+      var hg = ctx.createLinearGradient(0, y, 0, y + hh);
+      hg.addColorStop(0, "#ff6b5a");
+      hg.addColorStop(0.45, "#e0232a");
+      hg.addColorStop(1, "#8a1018");
+      ctx.fillStyle = hg;
+      if (fromRight) roundRect(hx + w - hw, y, hw, hh, 4);
+      else roundRect(hx, y, hw, hh, 4);
+      ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,0.22)";
+      if (fromRight) ctx.fillRect(hx + w - hw, y + 2, hw, 3);
+      else ctx.fillRect(hx, y + 2, hw, 3);
+    }
+    if ((f.barDmgT || 0) > 0 && f.barDmg) {
+      var a = Math.min(1, f.barDmgT / 0.35);
+      ctx.globalAlpha = a;
+      ctx.font = "bold 14px sans-serif";
+      ctx.fillStyle = "#fff6e0";
+      ctx.strokeStyle = "rgba(40,10,10,0.75)";
+      ctx.lineWidth = 3;
+      // pages21: number sits just past the white chip, inside the bar area (never off-screen).
+      // Inside the bar, right at the red/white boundary, on the red side.
+      var inner = hw > 34;
+      ctx.textAlign = fromRight ? (inner ? "left" : "right") : (inner ? "right" : "left");
+      var edge = fromRight ? hx + w - hw : hx + hw;
+      var tx = fromRight ? (inner ? edge + 4 : edge - 4) : (inner ? edge - 4 : edge + 4);
+      var ty = y + 13;
+      ctx.strokeText("-" + f.barDmg, tx, ty);
+      ctx.fillText("-" + f.barDmg, tx, ty);
+      ctx.globalAlpha = 1;
+    }
+    ctx.strokeStyle = "rgba(255,220,180,0.35)";
+    ctx.lineWidth = 1.5;
+    roundRect(hx, y, w, hh, 4);
+    ctx.stroke();
+    var bw = Math.round(w * 0.82);
+    var bx = fromRight ? x - bw : x;
+    var by = y + 20;
+    ctx.fillStyle = "rgba(6, 14, 28, 0.92)";
+    roundRect(bx, by, bw, 8, 3);
+    ctx.fill();
+    var cRatio = f.maxChakra > 0 ? f.chakra / f.maxChakra : 0;
+    var cw = Math.max(0, bw * cRatio);
+    if (cw > 0) {
+      var cg = ctx.createLinearGradient(0, by, 0, by + 8);
+      if (f.chakraLock > 0) {
+        cg.addColorStop(0, "#c8f0ff");
+        cg.addColorStop(0.5, "#60d0ff");
+        cg.addColorStop(1, "#2080ff");
+      } else {
+        cg.addColorStop(0, "#7ad0ff");
+        cg.addColorStop(0.5, "#2f8fff");
+        cg.addColorStop(1, "#1450c8");
+      }
+      ctx.fillStyle = cg;
+      if (fromRight) roundRect(bx + bw - cw, by, cw, 8, 3);
+      else roundRect(bx, by, cw, 8, 3);
+      ctx.fill();
+    }
+    if (f.chakraLock > 0) {
+      ctx.strokeStyle = "rgba(120,220,255,0.85)";
+      ctx.lineWidth = 1.5;
+      roundRect(bx, by, bw, 8, 3);
+      ctx.stroke();
+    }
+    if (f.hyperArmor > 0) {
+      ctx.font = "bold 11px sans-serif";
+      ctx.fillStyle = "#ff9040";
+      ctx.textAlign = fromRight ? "right" : "left";
+      ctx.fillText("霸体 " + Math.ceil(f.hyperArmor) + "s", fromRight ? bx + bw : bx, by + 20);
+    }
+    if (isTanjiro(f) && f.fireForm) {
+      ctx.fillStyle = "#ff6a3a";
+      ctx.font = "bold 12px sans-serif";
+      ctx.textAlign = fromRight ? "right" : "left";
+      ctx.fillText("火之形态", fromRight ? bx + bw : bx, by + ((f.hyperArmor || 0) > 0 ? 36 : 20));
+    }
+    if (isTanjiro(f) && (f.barrierT || 0) > 0 && !f.barrierUsed) {
+      ctx.fillStyle = "#5ee0d0";
+      ctx.font = "bold 12px sans-serif";
+      ctx.textAlign = fromRight ? "right" : "left";
+      var byOff = 20 + ((f.hyperArmor || 0) > 0 ? 16 : 0) + (f.fireForm ? 16 : 0);
+      ctx.fillText("水柱 " + f.barrierT.toFixed(1) + "s", fromRight ? bx + bw : bx, by + byOff);
+    } else if (f.chakraLock > 0) {
+      ctx.font = "bold 11px sans-serif";
+      ctx.fillStyle = "#7ad0ff";
+      ctx.textAlign = fromRight ? "right" : "left";
+      ctx.fillText("回蓝 " + Math.ceil(f.chakraLock) + "s", fromRight ? bx + bw : bx, by + 20);
+    }
+    ctx.strokeStyle = "rgba(140,190,255,0.35)";
+    ctx.lineWidth = 1;
+    roundRect(bx, by, bw, 8, 3);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawSkillOrb(cx, cy, f, id) {
+    var sk = f.skills[id];
+    var r = 26;
+    var ready = !paused && matchState === "fight" && sk.cd <= 0 && !(id === "spike" && (f.shield > 0 || f.shieldWind > 0)) && (f.chakra || 0) >= (sk.cost || 0);
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, r + 3, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(6,8,12,0.55)";
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    var bg = ctx.createRadialGradient(cx - 4, cy - 6, 2, cx, cy, r);
+    bg.addColorStop(0, ready ? "#3a2218" : "#1a1412");
+    bg.addColorStop(1, "#0c0a0c");
+    ctx.fillStyle = bg;
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = ready ? f.palette.glow : "rgba(120,100,90,0.55)";
+    if (ready) {
+      ctx.shadowColor = f.palette.glow;
+      ctx.shadowBlur = 10;
+    }
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    if (sk.scroll && scrollImgs[sk.iconId || id]) {
+      var simg = scrollImgs[sk.iconId || id];
+      if (simg.complete && simg.naturalWidth > 0) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(cx, cy - 2, 18, 0, Math.PI * 2);
+        ctx.clip();
+        ctx.globalAlpha = ready ? 1 : 0.45;
+        ctx.drawImage(simg, cx - 18, cy - 20, 36, 36);
+        ctx.restore();
+      } else {
+        icon(id, cx, cy - 2, ready ? "#fff8ef" : "#7a7470");
+      }
+    } else {
+      icon(id, cx, cy - 2, ready ? "#fff8ef" : "#7a7470");
+    }
+    ctx.font = "bold 11px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillStyle = ready ? "#ffe7b0" : "rgba(200,180,150,0.45)";
+    ctx.fillText(sk.key, cx, cy + 20);
+    if (sk.max > 0 && sk.cd > 0) {
+      var ratio = sk.cd / sk.max;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + ratio * Math.PI * 2);
+      ctx.closePath();
+      ctx.fillStyle = "rgba(0,0,0,0.62)";
+      ctx.fill();
+      ctx.font = "bold 13px sans-serif";
+      ctx.fillStyle = "#fff";
+      ctx.fillText(sk.cd.toFixed(1), cx, cy + 4);
+    }
+    ctx.restore();
+    addHit(cx - r, cy - r, r * 2, r * 2, function () {
+      if (!humanControls(f)) return;
+      if (id === "spike") shieldPressDown(f);
+      else tryCast(f, id);
+    });
+  }
+
+  function drawPauseButton(cx, cy) {
+    var r = 20;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = paused ? "#f0b429" : "#1a120e";
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "#e6c27a";
+    ctx.stroke();
+    ctx.fillStyle = paused ? "#3a2208" : "#f4efe6";
+    ctx.fillRect(cx - 7, cy - 7, 4, 14);
+    ctx.fillRect(cx + 3, cy - 7, 4, 14);
+    addHit(cx - r, cy - r, r * 2, r * 2, function () { paused = !paused; if (paused) fightClockPause(); else if (matchState === "fight") fightClockResume();; });
+  }
+
+  function drawSpeedChip(x, y, sp) {
+    var active = simSpeed === sp;
+    var w = 30;
+    var h = 22;
+    ctx.font = "bold 14px sans-serif";
+    ctx.textAlign = "center";
+    if (active) {
+      ctx.fillStyle = "#f0b429";
+      roundRect(x, y, w, h, 4);
+      ctx.fill();
+      ctx.fillStyle = "#3a2208";
+    } else {
+      ctx.fillStyle = "#f4efe6";
+    }
+    ctx.fillText("x" + sp, x + w / 2, y + 16);
+    addHit(x, y, w, h, function () { simSpeed = sp; });
+  }
+
+  function drawTimer() {
+    ctx.textAlign = "center";
+    if (gameMode === "practice") {
+      ctx.font = "bold 18px sans-serif";
+      ctx.fillStyle = "#3ef0e0";
+      ctx.fillText("练习模式", W / 2, 28);
+      ctx.font = "bold 42px sans-serif";
+      ctx.lineWidth = 7;
+      ctx.strokeStyle = "rgba(48, 18, 12, 0.88)";
+      ctx.strokeText("∞", W / 2, 88);
+      ctx.fillStyle = "#fff8f0";
+      ctx.fillText("∞", W / 2, 88);
+      return;
+    }
+    var secs = 60;
+    if (matchState === "fight" || matchState === "result" || matchState === "roundEnd") secs = Math.ceil(matchTime);
+    if (secs < 0) secs = 0;
+    ctx.font = "bold 16px sans-serif";
+    ctx.fillStyle = "#e4453a";
+    ctx.fillText(roundBannerText(), W / 2, 22);
+    ctx.font = "bold 14px sans-serif";
+    ctx.fillStyle = "#f4efe6";
+    ctx.fillText(roundWinsL + " : " + roundWinsR, W / 2, 40);
+    ctx.font = "bold 52px sans-serif";
+    ctx.lineWidth = 7;
+    ctx.strokeStyle = "rgba(48, 18, 12, 0.88)";
+    ctx.strokeText(String(secs), W / 2, 92);
+    ctx.fillStyle = (matchState === "fight" && secs <= 10) ? "#ffb067" : "#fff8f0";
+    ctx.fillText(String(secs), W / 2, 92);
+  }
+
+  function drawPracticePanel() {
+    if (gameMode !== "practice" || matchState !== "fight") return;
+    var pw = 600, ph = 160;
+    var bx = W / 2 - pw / 2;
+    var by = H - 64 - ph;
+    flowButton(W / 2 - 70, H - 52, 140, 34, practicePanel ? "关闭设置" : "练习设置", true, function () {
+      practicePanel = !practicePanel;
+    });
+    if (!practicePanel) return;
+    panelBox(bx, by, pw, ph);
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.font = "bold 15px sans-serif";
+    ctx.fillStyle = "#f4efe6";
+    ctx.fillText("技能冷却", bx + 16, by + 26);
+    ctx.textBaseline = "alphabetic";
+    flowButton(bx + 96, by + 12, 104, 28, practiceNoCdAll ? "全部无CD" : "全部有CD", true, function () {
+      practiceNoCdAll = !practiceNoCdAll;
+      if (practiceNoCdAll) {
+        var f0 = humanFighter();
+        var id0;
+        for (id0 in f0.skills) practiceNoCd[id0] = true;
+      } else {
+        practiceNoCd = {};
+      }
+    });
+    flowButton(bx + 208, by + 12, 104, 28, practiceDummy ? "木桩呆立" : "人机进攻", false, function () {
+      practiceDummy = !practiceDummy;
+    });
+    flowButton(bx + pw - 220, by + 12, 100, 28, "重选角色", false, function () {
+      practicePanel = false;
+      goCharSelect();
+    });
+    flowButton(bx + pw - 112, by + 12, 96, 28, "返回菜单", false, function () {
+      practicePanel = false;
+      goMode();
+    });
+    var f = humanFighter();
+    var order = (f.id === "L" || f.id === "L2") ? leftOrder : rightOrder;
+    var i, n = 0;
+    var cols = 4, cw = 138, ch = 30, gx = 6;
+    for (i = 0; i < order.length; i++) {
+      var sid = order[i];
+      var sk = f.skills[sid];
+      if (!sk) continue;
+      var on = practiceNoCdAll || practiceNoCd[sid];
+      var x = bx + 16 + (n % cols) * (cw + gx);
+      var y = by + 56 + Math.floor(n / cols) * (ch + 8);
+      n++;
+      flowButton(x, y, cw, ch, sk.key + " " + sk.name + (on ? " 无CD" : " 有CD"), on, (function (id) {
+        return function () {
+          practiceNoCdAll = false;
+          practiceNoCd[id] = !practiceNoCd[id];
+        };
+      })(sid));
+    }
+  }
+
+  function panelBox(x, y, w, h) {
+    ctx.save();
+    roundRect(x, y, w, h, 16);
+    ctx.fillStyle = "rgba(8,10,16,0.82)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(90,210,200,0.45)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function flowButton(x, y, w, h, label, primary, fn) {
+    ctx.save();
+    roundRect(x, y, w, h, 12);
+    if (primary) {
+      var g = ctx.createLinearGradient(x, y, x, y + h);
+      g.addColorStop(0, "rgba(40,180,170,0.95)");
+      g.addColorStop(1, "rgba(18,90,110,0.95)");
+      ctx.fillStyle = g;
+    } else {
+      ctx.fillStyle = "rgba(18,22,30,0.92)";
+    }
+    ctx.fill();
+    ctx.strokeStyle = primary ? "rgba(180,255,245,0.85)" : "rgba(160,180,200,0.35)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    // Shrink the label until it fits inside the button (never overflow).
+    var fpx = Math.min(22, Math.round(h * 0.62));
+    ctx.font = "bold " + fpx + "px sans-serif";
+    while (fpx > 9 && ctx.measureText(label).width > w - 12) {
+      fpx -= 1;
+      ctx.font = "bold " + fpx + "px sans-serif";
+    }
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = primary ? "#041018" : "#eef6ff";
+    ctx.fillText(label, x + w / 2, y + h / 2 + 1);
+    ctx.textBaseline = "alphabetic";
+    ctx.restore();
+    addHit(x, y, w, h, fn);
+  }
+
+  function drawIntroScreen() {
+    panelBox(W / 2 - 340, 100, 680, 460);
+    ctx.textAlign = "center";
+    ctx.font = "bold 54px sans-serif";
+    ctx.fillStyle = "#f4fbff";
+    ctx.fillText("青岚 · 烬戟", W / 2, 210);
+    ctx.font = "18px sans-serif";
+    ctx.fillStyle = "rgba(210,230,240,0.9)";
+    var lines = [
+      "三局两胜对决。带土虚化空间，佩恩天道黑棒气盾，炭治郎水之呼吸与火之形态。",
+      "开局可选单人人机、双人对战，或联机并肩打两名人机。",
+      "移动：P1 WASD / P2 方向键（或摇杆），技能点按图标或快捷键。",
+      "受击会产生僵直，伤害越高停顿越久。"
+    ];
+    var i;
+    for (i = 0; i < lines.length; i++) {
+      ctx.fillText(lines[i], W / 2, 270 + i * 34);
+    }
+    ctx.font = "bold 20px sans-serif";
+    ctx.fillStyle = "#3ef0e0";
+    var pulse = 0.55 + Math.sin(time * 3.2) * 0.35;
+    ctx.globalAlpha = pulse;
+    ctx.fillText("按任意键 / 点击屏幕 进入", W / 2, 470);
+    ctx.globalAlpha = 1;
+    addHit(0, 0, W, H, function () { goMode(); });
+  }
+
+  function drawModeScreen() {
+    panelBox(W / 2 - 340, 120, 680, 420);
+    ctx.textAlign = "center";
+    ctx.font = "bold 36px sans-serif";
+    ctx.fillStyle = "#f4fbff";
+    ctx.fillText("选择对战模式", W / 2, 190);
+    ctx.font = "15px sans-serif";
+    ctx.fillStyle = "rgba(200,220,230,0.8)";
+    ctx.fillText("单人挑战人机；双人对打；联机两人并肩对战两名人机", W / 2, 228);
+    flowButton(W / 2 - 300, 270, 180, 70, "单人 · 人机", true, function () {
+      gameMode = "ai";
+      goCharSelect();
+    });
+    flowButton(W / 2 - 90, 270, 180, 70, "双人", true, function () {
+      gameMode = "vs";
+      playerSide = "L";
+      goCharSelect();
+    });
+    flowButton(W / 2 + 120, 270, 180, 70, "联机模式", true, function () {
+      gameMode = "coop";
+      playerSide = "L";
+      goCharSelect();
+    });
+    flowButton(W / 2 - 90, 360, 180, 56, "练习模式", true, function () {
+      gameMode = "practice";
+      playerSide = "L";
+      practicePanel = false;
+      goCharSelect();
+    });
+    ctx.font = "13px sans-serif";
+    ctx.fillStyle = "rgba(180,210,220,0.75)";
+    ctx.fillText("联机：P1 WASD + QERF… / P2 方向键 + UIO PJK… 并肩打两名随机人机", W / 2, 430);
+    ctx.fillText("练习：无计时，可单独开关技能冷却；对手可选呆立木桩或简易人机", W / 2, 452);
+    flowButton(W / 2 - 90, 470, 180, 44, "返回介绍", false, function () { goIntro(); });
+  }
+
+  function rosterById(id) {
+    var i;
+    for (i = 0; i < charRoster.length; i++) if (charRoster[i].id === id) return charRoster[i];
+    return null;
+  }
+
+  function drawPortraitCard(x, y, w, h, c, selected, dimmed) {
+    ctx.save();
+    roundRect(x, y, w, h, 14);
+    if (!c.unlocked) ctx.fillStyle = "rgba(28,30,36,0.94)";
+    else if (selected) ctx.fillStyle = "rgba(18,46,50,0.96)";
+    else ctx.fillStyle = "rgba(245,247,250,0.96)";
+    ctx.fill();
+    ctx.lineWidth = selected ? 3.5 : 2;
+    ctx.strokeStyle = !c.unlocked ? "rgba(90,90,100,0.45)" : (selected ? "#3ef0e0" : "rgba(40,50,70,0.35)");
+    ctx.stroke();
+
+    var img = cardImgs[c.id];
+    var imgH = h - 58;
+    var imgW = w - 20;
+    var ix = x + 10;
+    var iy = y + 10;
+    if (img && img.complete && img.naturalWidth > 0) {
+      var iw = img.naturalWidth;
+      var ih = img.naturalHeight;
+      var sc = Math.min(imgW / iw, imgH / ih);
+      var dw = iw * sc;
+      var dh = ih * sc;
+      var dx = x + (w - dw) / 2;
+      var dy = y + 10 + (imgH - dh);
+      if (!c.unlocked || dimmed) ctx.globalAlpha = 0.35;
+      ctx.drawImage(img, dx, dy, dw, dh);
+      ctx.globalAlpha = 1;
+    } else if (c.unlocked) {
+      var pal = (KIT_DEFS[c.id] && KIT_DEFS[c.id].palette) || { body: "#444", glow: "#aaa" };
+      ctx.beginPath();
+      ctx.arc(x + w / 2, y + h * 0.38, Math.min(w, h) * 0.16, 0, Math.PI * 2);
+      ctx.fillStyle = pal.body;
+      ctx.fill();
+      ctx.strokeStyle = pal.glow;
+      ctx.lineWidth = 3;
+      ctx.stroke();
+    }
+
+    if (!c.unlocked) {
+      ctx.fillStyle = "rgba(20,20,28,0.55)";
+      roundRect(x + 4, y + 4, w - 8, h - 8, 12);
+      ctx.fill();
+      ctx.fillStyle = "rgba(200,200,210,0.85)";
+      ctx.font = "bold 22px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(c.name, x + w / 2, y + h * 0.46);
+      ctx.font = "bold 14px sans-serif";
+      ctx.fillStyle = "rgba(180,180,190,0.8)";
+      ctx.fillText("即将开放", x + w / 2, y + h * 0.58);
+    } else {
+      ctx.fillStyle = selected ? "#041018" : "#14202c";
+      roundRect(x + 8, y + h - 42, w - 16, 30, 8);
+      ctx.fill();
+      ctx.font = "bold 16px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillStyle = selected ? "#3ef0e0" : "#f4fbff";
+      ctx.fillText(c.name, x + w / 2, y + h - 21);
+    }
+    ctx.restore();
+  }
+
+  function drawVsSlot(x, y, w, h, side, pickId) {
+    var active = vsAssignSide === side;
+    var c = pickId ? rosterById(pickId) : null;
+    var scrollId = side === "L" ? selectedScrollL : selectedScrollR;
+    var scrollDef = scrollId ? scrollById(scrollId) : null;
+    ctx.save();
+    roundRect(x, y, w, h, 16);
+    ctx.fillStyle = active ? "rgba(20,48,52,0.96)" : "rgba(12,16,24,0.92)";
+    ctx.fill();
+    ctx.lineWidth = active ? 4 : 2;
+    ctx.strokeStyle = active ? "#3ef0e0" : (c ? "rgba(160,200,190,0.55)" : "rgba(140,170,190,0.35)");
+    ctx.stroke();
+    if (active) {
+      ctx.fillStyle = "#3ef0e0";
+      ctx.beginPath();
+      ctx.moveTo(x + w / 2 - 9, y - 1);
+      ctx.lineTo(x + w / 2 + 9, y - 1);
+      ctx.lineTo(x + w / 2, y + 9);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.textAlign = "center";
+    ctx.font = "bold 17px sans-serif";
+    ctx.fillStyle = "#f4fbff";
+    ctx.fillText(side === "L" ? "左侧 · P1" : "右侧 · P2", x + w / 2, y + 26);
+    ctx.font = "12px sans-serif";
+    ctx.fillStyle = "rgba(190,210,220,0.75)";
+    ctx.fillText(side === "L" ? "WASD · 左摇杆" : "方向键 · 右摇杆", x + w / 2, y + 46);
+
+    if (c) {
+      var img = cardImgs[c.id];
+      var boxY = y + 56;
+      var boxH = h - 108;
+      var boxW = w - 24;
+      var boxX = x + 12;
+      roundRect(boxX, boxY, boxW, boxH, 12);
+      ctx.fillStyle = "#ffffff";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(40,50,70,0.22)";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      if (img && img.complete && img.naturalWidth > 0) {
+        var sc = Math.min((boxW - 6) / img.naturalWidth, (boxH - 36) / img.naturalHeight);
+        var dw = img.naturalWidth * sc;
+        var dh = img.naturalHeight * sc;
+        ctx.drawImage(img, boxX + (boxW - dw) / 2, boxY + boxH - 32 - dh, dw, dh);
+      } else {
+        var pal = (KIT_DEFS[c.id] && KIT_DEFS[c.id].palette) || { body: "#444", glow: "#aaa" };
+        ctx.beginPath();
+        ctx.arc(x + w / 2, boxY + boxH * 0.4, Math.min(boxW, boxH) * 0.2, 0, Math.PI * 2);
+        ctx.fillStyle = pal.body;
+        ctx.fill();
+        ctx.strokeStyle = pal.glow;
+        ctx.lineWidth = 3;
+        ctx.stroke();
+      }
+      ctx.font = "bold 20px sans-serif";
+      ctx.fillStyle = "#14202c";
+      ctx.fillText(c.name, x + w / 2, boxY + boxH - 12);
+      if (scrollDef) {
+        var simg = scrollImgs[scrollDef.id];
+        var sx = x + w / 2;
+        var sy = y + h - 24;
+        ctx.beginPath();
+        ctx.arc(sx, sy, 15, 0, Math.PI * 2);
+        ctx.fillStyle = "#0c1018";
+        ctx.fill();
+        if (simg && simg.complete && simg.naturalWidth > 0) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(sx, sy, 14, 0, Math.PI * 2);
+          ctx.clip();
+          ctx.drawImage(simg, sx - 14, sy - 14, 28, 28);
+          ctx.restore();
+        }
+        ctx.strokeStyle = scrollDef.color || "#3ef0e0";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(sx, sy, 15, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    } else {
+      ctx.font = "bold 16px sans-serif";
+      ctx.fillStyle = active ? "#3ef0e0" : "rgba(160,180,200,0.55)";
+      ctx.fillText(active ? "下一名：点中央角色" : "等待选择", x + w / 2, y + h * 0.48);
+      ctx.font = "12px sans-serif";
+      ctx.fillStyle = "rgba(180,200,210,0.6)";
+      ctx.fillText(side === "L" ? "第一次点击填这里" : "第二次点击填这里", x + w / 2, y + h * 0.58);
+    }
+    ctx.restore();
+    addHit(x, y, w, h, (function (s) {
+      return function () { vsAssignSide = s; };
+    })(side));
+  }
+
+  function drawScrollPicker(y, mode) {
+    // mode: "solo" | "vs"
+    var i;
+    var iconR = 34;
+    var gap = 22;
+    var n = SCROLL_DEFS.length;
+    var totalW = n * (iconR * 2) + (n - 1) * gap;
+    var startX = (W - totalW) / 2 + iconR;
+    ctx.textAlign = "center";
+    ctx.font = "bold 16px sans-serif";
+    ctx.fillStyle = "#f4fbff";
+    ctx.fillText("密卷", W / 2, y - 34);
+    ctx.font = "12px sans-serif";
+    ctx.fillStyle = "rgba(200,220,230,0.75)";
+    if (mode === "vs") {
+      ctx.fillText("密卷：霸体 / 回蓝 / 清CD / 驱散 · 先赋左再赋右", W / 2, y - 16);
+    } else {
+      ctx.fillText("密卷：霸体4秒 · 回蓝锁满10秒 · 清CD · 驱散(僵直+破霸体)", W / 2, y - 16);
+    }
+    for (i = 0; i < n; i++) {
+      var def = SCROLL_DEFS[i];
+      var cx = startX + i * (iconR * 2 + gap);
+      var cy = y + 28;
+      var pickedSolo = mode === "solo" && selectedScroll === def.id;
+      var pickedL = mode === "vs" && selectedScrollL === def.id;
+      var pickedR = mode === "vs" && selectedScrollR === def.id;
+      var picked = pickedSolo || pickedL || pickedR;
+      ctx.beginPath();
+      ctx.arc(cx, cy, iconR + 4, 0, Math.PI * 2);
+      ctx.fillStyle = picked ? "rgba(62,240,224,0.25)" : "rgba(8,12,18,0.7)";
+      ctx.fill();
+      ctx.lineWidth = picked ? 3 : 2;
+      ctx.strokeStyle = picked ? "#3ef0e0" : "rgba(160,180,200,0.35)";
+      ctx.stroke();
+      var img = scrollImgs[def.id];
+      if (img && img.complete && img.naturalWidth > 0) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(cx, cy, iconR - 1, 0, Math.PI * 2);
+        ctx.clip();
+        ctx.drawImage(img, cx - iconR + 1, cy - iconR + 1, (iconR - 1) * 2, (iconR - 1) * 2);
+        ctx.restore();
+      } else {
+        ctx.beginPath();
+        ctx.arc(cx, cy, iconR - 4, 0, Math.PI * 2);
+        ctx.fillStyle = def.color;
+        ctx.fill();
+      }
+      ctx.font = "bold 12px sans-serif";
+      ctx.fillStyle = picked ? "#3ef0e0" : "rgba(230,240,250,0.85)";
+      ctx.fillText(def.name, cx, cy + iconR + 14);
+      if (pickedL || pickedR) {
+        ctx.font = "bold 11px sans-serif";
+        ctx.fillStyle = "#3ef0e0";
+        ctx.fillText(pickedL && pickedR ? "双" : (pickedL ? "左" : "右"), cx, cy + iconR + 28);
+      }
+      addHit(cx - iconR - 4, cy - iconR - 4, (iconR + 4) * 2, (iconR + 4) * 2 + 16, (function (sid) {
+        return function () {
+          if (mode === "solo") {
+            selectedScroll = sid;
+          } else {
+            // Fill empty scroll slots left-then-right; if both filled, replace focused side
+            if (!selectedScrollL) {
+              if (selectedScrollR === sid) selectedScrollR = null;
+              selectedScrollL = sid;
+            } else if (!selectedScrollR) {
+              if (selectedScrollL === sid) return;
+              selectedScrollR = sid;
+            } else if (vsAssignSide === "L") {
+              if (selectedScrollR === sid) return;
+              selectedScrollL = sid;
+            } else {
+              if (selectedScrollL === sid) return;
+              selectedScrollR = sid;
+            }
+          }
+        };
+      })(def.id));
+    }
+  }
+
+  function vsScrollReady() {
+    return !!(selectedScrollL && selectedScrollR);
+  }
+
+  function drawVsCharSelectScreen() {
+    if (!coreAssetsReady()) {
+      panelBox(50, 28, W - 100, H - 56);
+      ctx.textAlign = "center";
+      ctx.font = "bold 22px sans-serif";
+      ctx.fillStyle = "#f4fbff";
+      ctx.fillText("加载菜单素材…", W / 2, H / 2);
+      var pr = groupProgress(["core"]);
+      ctx.font = "14px sans-serif";
+      ctx.fillStyle = "#aaa";
+      ctx.fillText(pr.done + " / " + pr.tot, W / 2, H / 2 + 28);
+      return;
+    }
+    panelBox(40, 28, W - 80, H - 56);
+    ctx.textAlign = "center";
+    ctx.font = "bold 28px sans-serif";
+    ctx.fillStyle = "#f4fbff";
+    ctx.fillText(gameMode === "coop" ? "联机选角 · 2v2" : "双人选角", W / 2, 62);
+    ctx.font = "13px sans-serif";
+    ctx.fillStyle = "rgba(200,220,230,0.85)";
+    var stepHint = !selectedL
+      ? "点击角色卡 → 自动填入左侧 P1"
+      : (!selectedR ? "再点另一名角色 → 自动填入右侧 P2" : "两边已选；点左右框可改侧，再点卡可更换");
+    if (gameMode === "coop") {
+      stepHint = !selectedL
+        ? "联机：点角色卡 → P1（WASD）"
+        : (!selectedR ? "再点另一名 → P2（方向键）；对手为两名随机人机" : "已选两人；开始后并肩打两名人机");
+    }
+    ctx.fillText(stepHint, W / 2, 84);
+
+    var slotW = 190;
+    var slotH = 300;
+    drawVsSlot(56, 100, slotW, slotH, "L", selectedL);
+    drawVsSlot(W - 56 - slotW, 100, slotW, slotH, "R", selectedR);
+
+    var cols = 3;
+    var cardW = 124;
+    var cardH = 168;
+    var gapX = 14;
+    var gapY = 10;
+    var gridW = cols * cardW + (cols - 1) * gapX;
+    var startX = (W - gridW) / 2;
+    var startY = 98;
+    var i;
+    for (i = 0; i < charRoster.length; i++) {
+      var c = charRoster[i];
+      var col = i % cols;
+      var row = Math.floor(i / cols);
+      var x = startX + col * (cardW + gapX);
+      var y = startY + row * (cardH + gapY);
+      var taken = (selectedL === c.id) || (selectedR === c.id);
+      drawPortraitCard(x, y, cardW, cardH, c, taken, false);
+      if (taken) {
+        ctx.save();
+        ctx.font = "bold 12px sans-serif";
+        ctx.textAlign = "center";
+        roundRect(x + 8, y + 8, cardW - 16, 22, 7);
+        ctx.fillStyle = "#3ef0e0";
+        ctx.fill();
+        ctx.fillStyle = "#041018";
+        ctx.fillText(selectedL === c.id ? "已选 · 左" : "已选 · 右", x + cardW / 2, y + 23);
+        ctx.restore();
+      }
+      if (c.unlocked) {
+        addHit(x, y, cardW, cardH, (function (cid) {
+          return function () { pickVsCard(cid); };
+        })(c.id));
+      }
+    }
+
+    drawScrollPicker(500, "vs");
+
+    var can = vsCanConfirm() && vsScrollReady();
+    ctx.font = "13px sans-serif";
+    ctx.fillStyle = can ? "rgba(180,255,220,0.9)" : "rgba(255,180,140,0.9)";
+    var tip = "请为左右各选不同角色与密卷";
+    if (vsCanConfirm() && !vsScrollReady()) tip = "角色已选，请再为左右各选密卷";
+    else if (can) tip = "可以开始对战";
+    ctx.fillText(tip, W / 2, H - 78);
+
+    flowButton(40, H - 58, 120, 38, "返回", false, function () { goMode(); });
+    flowButton(W / 2 - 100, H - 64, 200, 46, gameMode === "coop" ? "开始联机" : "开始对战", can, function () {
+      if (!vsCanConfirm() || !vsScrollReady()) return;
+      beginMatch();
+    });
+  }
+
+  function drawSoloCharSelectScreen() {
+    if (!coreAssetsReady()) {
+      panelBox(50, 28, W - 100, H - 56);
+      ctx.textAlign = "center";
+      ctx.font = "bold 22px sans-serif";
+      ctx.fillStyle = "#f4fbff";
+      ctx.fillText("加载菜单素材…", W / 2, H / 2);
+      var pr = groupProgress(["core"]);
+      ctx.font = "14px sans-serif";
+      ctx.fillStyle = "#aaa";
+      ctx.fillText(pr.done + " / " + pr.tot, W / 2, H / 2 + 28);
+      return;
+    }
+    panelBox(50, 28, W - 100, H - 56);
+    ctx.textAlign = "center";
+    ctx.font = "bold 30px sans-serif";
+    ctx.fillStyle = "#f4fbff";
+    ctx.fillText("选择角色与密卷", W / 2, 68);
+    ctx.font = "13px sans-serif";
+    ctx.fillStyle = "rgba(200,220,230,0.8)";
+    ctx.fillText("先点角色卡，再点底部密卷，然后开始。对手自动是另一位解锁角色。", W / 2, 92);
+
+    var cols = 3;
+    var cardW = 136;
+    var cardH = 176;
+    var gapX = 18;
+    var gapY = 10;
+    var gridW = cols * cardW + (cols - 1) * gapX;
+    var startX = (W - gridW) / 2;
+    var startY = 108;
+    var i;
+    for (i = 0; i < charRoster.length; i++) {
+      var c = charRoster[i];
+      var col = i % cols;
+      var row = Math.floor(i / cols);
+      var x = startX + col * (cardW + gapX);
+      var y = startY + row * (cardH + gapY);
+      var selected = c.unlocked && selectedChar === c.id;
+      drawPortraitCard(x, y, cardW, cardH, c, selected, false);
+      if (c.unlocked) {
+        addHit(x, y, cardW, cardH, (function (cid) {
+          return function () { applyPlayerPick(cid); };
+        })(c.id));
+      }
+    }
+
+    drawScrollPicker(540, "solo");
+
+    var can = !!(selectedChar && selectedScroll);
+    ctx.font = "13px sans-serif";
+    ctx.fillStyle = can ? "rgba(180,255,220,0.9)" : "rgba(255,180,140,0.9)";
+    ctx.fillText(can ? "角色与密卷已选，可以开始" : "请选择角色和一卷密卷", W / 2, H - 78);
+
+    flowButton(40, H - 58, 120, 38, "返回", false, function () { goMode(); });
+    flowButton(W / 2 - 100, H - 64, 200, 46, "开始对战", can, function () {
+      if (!selectedChar || !selectedScroll) return;
+      beginMatch();
+    });
+  }
+
+  function drawCharSelectScreen() {
+    if (gameMode === "vs" || gameMode === "coop") drawVsCharSelectScreen();
+    else drawSoloCharSelectScreen();
+  }
+
+  function drawHud() {
+    hudHits = [];
+
+    if (matchState === "intro") {
+      drawStage();
+      drawIntroScreen();
+      return;
+    }
+    if (matchState === "mode") {
+      drawStage();
+      drawModeScreen();
+      return;
+    }
+    if (matchState === "charSelect") {
+      drawStage();
+      drawCharSelectScreen();
+      return;
+    }
+
+    drawTimer();
+    if (!hudHidden) {
+      var i;
+      if (isCoop()) {
+        ctx.textAlign = "left";
+        ctx.font = "bold 14px sans-serif";
+        ctx.fillStyle = "#f4efe6";
+        ctx.fillText("P1 · " + left.name, 16, 16);
+        drawResourceBars(16, 22, 200, left, false);
+        drawPortrait(236, 38, left);
+        ctx.fillText("P2 · " + left2.name, 16, 92);
+        drawResourceBars(16, 98, 200, left2, false);
+        drawPortrait(236, 114, left2);
+        for (i = 0; i < leftOrder.length; i++) drawSkillOrb(30 + i * 50, 160, left, leftOrder[i]);
+        for (i = 0; i < left2Order.length; i++) drawSkillOrb(30 + i * 50, 214, left2, left2Order[i]);
+
+        ctx.textAlign = "right";
+        ctx.font = "bold 14px sans-serif";
+        ctx.fillStyle = "#f4efe6";
+        ctx.fillText("AI · " + right.name, W - 16, 16);
+        drawResourceBars(W - 16, 22, 200, right, true);
+        drawPortrait(W - 236, 38, right);
+        ctx.fillText("AI · " + right2.name, W - 16, 92);
+        drawResourceBars(W - 16, 98, 200, right2, true);
+        drawPortrait(W - 236, 114, right2);
+      } else {
+        ctx.textAlign = "left";
+        ctx.font = "bold 16px sans-serif";
+        ctx.fillStyle = "#f4efe6";
+        ctx.fillText(left.name + (((gameMode === "ai" || gameMode === "practice") && playerSide === "L") ? " · 你" : ((gameMode === "ai" || gameMode === "practice") ? " · AI" : "")), 16, 18);
+        drawResourceBars(16, 26, 230, left, false);
+        drawPortrait(278, 42, left);
+        for (i = 0; i < leftOrder.length; i++) drawSkillOrb(30 + i * 56, 108, left, leftOrder[i]);
+
+        drawPortrait(W - 278, 42, right);
+        ctx.textAlign = "right";
+        ctx.font = "bold 16px sans-serif";
+        ctx.fillStyle = "#f4efe6";
+        ctx.fillText((((gameMode === "ai" || gameMode === "practice") && playerSide === "R") ? "你 · " : ((gameMode === "ai" || gameMode === "practice") ? "AI · " : "")) + right.name, W - 16, 18);
+        drawResourceBars(W - 16, 26, 230, right, true);
+        for (i = 0; i < rightOrder.length; i++) drawSkillOrb(W - 30 - (rightOrder.length - 1 - i) * 56, 108, right, rightOrder[i]);
+      }
+
+      drawPauseButton(34, H - 36);
+      var speeds = [1, 2, 4, 8];
+      for (i = 0; i < speeds.length; i++) drawSpeedChip(66 + i * 36, H - 47, speeds[i]);
+      ctx.fillStyle = "#f0b429";
+      roundRect(214, H - 52, 118, 32, 6);
+      ctx.fill();
+      ctx.strokeStyle = "#8a5a10";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.font = "bold 16px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#3a2208";
+      ctx.fillText("隐藏界面", 273, H - 31);
+      addHit(214, H - 52, 118, 32, function () { hudHidden = true; });
+    } else {
+      ctx.fillStyle = "rgba(20,14,10,0.72)";
+      roundRect(24, H - 52, 92, 30, 6);
+      ctx.fill();
+      ctx.font = "bold 14px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#f4efe6";
+      ctx.fillText("显示界面", 70, H - 32);
+      addHit(24, H - 52, 92, 30, function () { hudHidden = false; });
+    }
+    if (gameMode === "practice") drawPracticePanel();
+    if (matchState === "fight" || matchState === "countdown" || matchState === "roundEnd") drawSticks();
+
+    if (matchState === "countdown") {
+      ctx.textAlign = "center";
+      if (countdownPhase === "round") {
+        ctx.font = "bold 72px sans-serif";
+        ctx.fillStyle = "#f4fbff";
+        ctx.strokeStyle = "rgba(20,12,10,0.65)";
+        ctx.lineWidth = 8;
+        var rb = roundBannerText();
+        ctx.strokeText(rb, W / 2, H / 2);
+        ctx.fillText(rb, W / 2, H / 2);
+        if (gameMode !== "practice") {
+          ctx.font = "bold 22px sans-serif";
+          ctx.fillStyle = "#f4efe6";
+          ctx.fillText(roundWinsL + " : " + roundWinsR, W / 2, H / 2 + 48);
+        }
+      } else {
+        ctx.font = "bold 64px sans-serif";
+        ctx.fillStyle = "#ffe7a0";
+        ctx.strokeStyle = "rgba(20,12,10,0.65)";
+        ctx.lineWidth = 8;
+        ctx.strokeText("开始战斗", W / 2, H / 2 + 10);
+        ctx.fillText("开始战斗", W / 2, H / 2 + 10);
+      }
+    }
+    if (matchState === "roundEnd") {
+      var rw = matchResult === "L" ? left : (matchResult === "R" ? right : null);
+      var roundTitle = null;
+      if (!rw) roundTitle = "本回平局";
+      else if (isCoop()) roundTitle = (matchResult === "L" ? "联机队" : "人机队") + " 赢下本回";
+      else roundTitle = rw.name + " 赢下本回";
+      ctx.fillStyle = "rgba(0,0,0,0.45)";
+      ctx.fillRect(W / 2 - 220, H / 2 - 78, 440, 130);
+      ctx.textAlign = "center";
+      ctx.font = "bold 42px sans-serif";
+      if (!rw) {
+        ctx.fillStyle = "#e8eef2";
+        ctx.fillText(roundTitle, W / 2, H / 2 - 12);
+      } else {
+        ctx.fillStyle = rw.palette.glow;
+        ctx.fillText(roundTitle, W / 2, H / 2 - 12);
+      }
+      ctx.font = "18px sans-serif";
+      ctx.fillStyle = "#e8eef2";
+      ctx.fillText("比分 " + roundWinsL + " : " + roundWinsR + "    下一回准备中", W / 2, H / 2 + 28);
+    }
+    if (matchState === "result") {
+      var winner = matchResult === "L" ? left : (matchResult === "R" ? right : null);
+      var winTitle = null;
+      if (!winner) winTitle = "平局";
+      else if (isCoop()) winTitle = (matchResult === "L" ? "联机队" : "人机队") + " 胜负已分";
+      else winTitle = winner.name + " 胜负已分";
+      panelBox(W / 2 - 260, H / 2 - 140, 520, 280);
+      ctx.textAlign = "center";
+      ctx.font = "bold 48px sans-serif";
+      if (!winner) {
+        ctx.fillStyle = "#e8eef2";
+        ctx.fillText(winTitle, W / 2, H / 2 - 60);
+      } else {
+        ctx.fillStyle = winner.palette.glow;
+        ctx.fillText(winTitle, W / 2, H / 2 - 60);
+      }
+      ctx.font = "18px sans-serif";
+      ctx.fillStyle = "#e8eef2";
+      ctx.fillText("三局两胜  " + roundWinsL + " : " + roundWinsR, W / 2, H / 2 - 18);
+      flowButton(W / 2 - 210, H / 2 + 20, 180, 52, "再选模式", true, function () { goMode(); });
+      flowButton(W / 2 + 30, H / 2 + 20, 180, 52, "返回标题", false, function () { goIntro(); });
+      flowButton(W / 2 - 90, H / 2 + 90, 180, 44, "同配置再战", false, function () { beginMatch(); });
+    }
+    ctx.textAlign = "left";
+  }
+
+  var bootOverlayGone = false;
+  function hideBootOverlay() {
+    if (bootOverlayGone) return;
+    bootOverlayGone = true;
+    var el = document.getElementById("boot");
+    if (el) el.parentNode.removeChild(el);
+  }
+  function render() {
+    if (!bootOverlayGone) {
+      var bo = document.getElementById("bootMsg");
+      var cp = groupProgress(["core"]);
+      if (bo) bo.textContent = "加载菜单素材 " + cp.done + " / " + cp.tot + (loadStatusLines()[0] ? " · " + loadStatusLines()[0] : "");
+      if (coreAssetsReady()) hideBootOverlay();
+    }
+    var ox = 0;
+    var oy = 0;
+    if (shake > 0 && !isMenuState()) {
+      ox = (Math.random() - 0.5) * shake;
+      oy = (Math.random() - 0.5) * shake;
+    }
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    ctx.setTransform(1, 0, 0, 1, ox, oy);
+    if (matchState === "loading") { drawLoading(); return; }
+    if (matchState === "intro" || matchState === "mode" || matchState === "charSelect") {
+      // Flow screens paint their own stage + UI inside drawHud.
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      drawHud();
+      return;
+    }
+    drawStage();
+    drawSpikes();
+    drawRings();
+    drawWheels();
+    var batch = [];
+    var gi;
+    var fightersDraw = activeFighters();
+    for (gi = 0; gi < fightersDraw.length; gi++) {
+      batch.push({ y: fightersDraw[gi].y, kind: "f", who: fightersDraw[gi] });
+    }
+    for (gi = 0; gi < ghosts.length; gi++) batch.push({ y: ghosts[gi].y, kind: "g", who: ghosts[gi] });
+    for (gi = 0; gi < projectiles.length; gi++) batch.push({ y: projectiles[gi].y + 70, kind: "p", who: projectiles[gi] });
+    for (gi = 0; gi < swords.length; gi++) batch.push({ y: swords[gi].y, kind: "b", who: swords[gi] });
+    batch.sort(function (a, b) { return a.y - b.y; });
+    for (gi = 0; gi < batch.length; gi++) {
+      if (batch[gi].kind === "f") drawFighter(batch[gi].who);
+      else if (batch[gi].kind === "g") drawGhost(batch[gi].who);
+      else if (batch[gi].kind === "b") drawEnergySword(batch[gi].who);
+      else drawOneProjectile(batch[gi].who);
+    }
+    drawBursts();
+    for (gi = 0; gi < fightersDraw.length; gi++) {
+      if (fightersDraw[gi].shield > 0 && !fightersDraw[gi].repulseOn) drawAirShield(fightersDraw[gi]);
+      drawPullStreams(fightersDraw[gi]);
+    }
+    drawSparks();
+    drawFloaters();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    drawHud();
+  }
+
+  var last = 0;
+  function frame(now) {
+    if (!last) last = now;
+    var dt = (now - last) / 1000;
+    last = now;
+    var step = paused ? 0 : Math.min(dt, 0.05) * simSpeed;
+    if (step > 0.22) step = 0.22;
+    if (matchState === "fight" && phaseSlow > 0 && step > 0) {
+      if (phaseSlow >= step) {
+        phaseSlow -= step;
+        step *= 0.5;
+      } else {
+        var rest = step - phaseSlow;
+        step = phaseSlow * 0.5 + rest;
+        phaseSlow = 0;
+      }
+    }
+    if (matchState === "loading") {
+      loadT += dt;
+      if (sheetManifest) {
+        for (var lk = 0; lk < loadKits.length; lk++) {
+          if (!(ASSET_GROUPS[loadKits[lk]] || []).length) { registerKitSheets(loadKits[lk]); ensureGroups([loadKits[lk]], "match"); }
+        }
+      }
+      var lp = groupProgress(loadKits.concat(["core"]));
+      if (!sheetManifest) lp.tot = lp.done + 1;
+      
+      if (lp.done >= lp.tot && lp.err === 0) {
+        loadMode = "idle";
+        matchStall = false;
+        beginCountdown();
+      }
+      render();
+      requestAnimationFrame(frame);
+      return;
+    }
+    if (matchState === "countdown") {
+      if (step <= 0) {
+        render();
+        requestAnimationFrame(frame);
+        return;
+      }
+      time += step;
+      countLeft -= step;
+      if (countLeft <= 0) {
+        if (countdownPhase === "round") {
+          countdownPhase = "fight";
+          countLeft = 0.95;
+        } else {
+          matchState = "fight";
+          if (gameMode === "practice") {
+            matchTime = 99999;
+            fightClockReset(99999);
+          } else {
+            fightClockReset(60);
+            matchTime = 60;
+          }
+          if (!paused) fightClockResume();
+          syncFlowHint();
+        }
+      }
+    } else if (matchState === "roundEnd") {
+      if (step > 0) {
+        time += step;
+        roundEndLeft -= step;
+        if (roundEndLeft <= 0) {
+          roundIndex += 1;
+          beginCountdown();
+        }
+      }
+    } else if (matchState === "fight") {
+      if (step > 0) {
+        updateAI(step);
+        update(step);
+      }
+      if (matchState === "fight" && gameMode !== "practice") {
+        // pages23: round timer = real seconds (ignores simSpeed and frame hitches).
+        matchTime = Math.max(0, fightClock.limit - fightClockElapsed());
+        if (matchTime <= 0) {
+          matchTime = 0;
+          endByTime();
+        }
+      }
+    } else {
+      time += dt;
+    }
+    render();
+    requestAnimationFrame(frame);
+  }
+
+  var controlMap = {
+    q: ["L", "punch"],
+    e: ["L", "phase"],
+    r: ["L", "tele"],
+    f: ["L", "breath"],
+    u: ["R", "thrust"],
+    i: ["R", "fire"],
+    o: ["R", "swap"],
+    p: ["R", "spike"],
+    j: ["R", "pull"],
+    c: ["L", "space"],
+    k: ["R", "cleave"]
+  };
+
+  function mappedSkillRelease(k) {
+    var m = controlMap[k];
+    return m ? m[1] : null;
+  }
+
+  function isArrowKey(key) {
+    return key === "ArrowUp" || key === "ArrowDown" || key === "ArrowLeft" || key === "ArrowRight";
+  }
+
+  window.addEventListener("keydown", function (e) {
+    if (e.key === "Shift") {
+      keysDown.shift = true;
+      return;
+    }
+    if (e.code === "Space" || e.key === " ") e.preventDefault();
+    if (matchState === "intro" && !e.repeat) {
+      e.preventDefault();
+      goMode();
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (matchState === "result" && !e.repeat && !keysDown.enter) beginMatch();
+      if (matchState === "mode" && !e.repeat) {
+        gameMode = "ai";
+        goCharSelect();
+      }
+      keysDown.enter = true;
+      return;
+    }
+    if (matchState === "mode" || matchState === "charSelect" || matchState === "result" || matchState === "countdown" || matchState === "roundEnd") {
+      if (isArrowKey(e.key)) e.preventDefault();
+      return;
+    }
+    if (matchState !== "fight") {
+      if (isArrowKey(e.key)) e.preventDefault();
+      return;
+    }
+    if (isArrowKey(e.key)) {
+      e.preventDefault();
+      keysDown[e.key] = true;
+      return;
+    }
+    var k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (k === "w" || k === "a" || k === "s" || k === "d") {
+      e.preventDefault();
+      keysDown[k] = true;
+      return;
+    }
+    var mapped = controlMap[k];
+    if (!mapped) return;
+    e.preventDefault();
+    if (e.repeat || keysDown[k]) {
+      keysDown[k] = true;
+      return;
+    }
+    keysDown[k] = true;
+    var caster = fighterByOwner(mapped[0]);
+    if (!caster || !humanControls(caster)) return;
+    if (mapped[1] === "spike") shieldPressDown(caster);
+    else tryCast(caster, mapped[1]);
+  });
+
+  window.addEventListener("keyup", function (e) {
+    if (e.key === "Shift") {
+      keysDown.shift = false;
+      return;
+    }
+    if (isArrowKey(e.key)) {
+      keysDown[e.key] = false;
+      return;
+    }
+    if (e.key === "Enter") {
+      keysDown.enter = false;
+      return;
+    }
+    var k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (mappedSkillRelease(k) === "spike") {
+      var rel = controlMap[k];
+      if (rel) {
+        var relF = fighterByOwner(rel[0]);
+        if (relF) shieldPressUp(relF);
+      }
+    }
+    keysDown[k] = false;
+  });
+
+  window.addEventListener("blur", function () {
+    shieldPressUp(left);
+    shieldPressUp(right);
+    shieldPressUp(left2);
+    shieldPressUp(right2);
+    var key;
+    for (key in keysDown) keysDown[key] = false;
+    releaseStick(sticks[0].pid);
+    releaseStick(sticks[1].pid);
+  });
+
+  var sticks = [
+    { id: "L", cx: 86, cy: H - 176, r: 58, dx: 0, dy: 0, nx: 0, ny: 0, pid: null },
+    { id: "R", cx: W - 86, cy: H - 176, r: 58, dx: 0, dy: 0, nx: 0, ny: 0, pid: null }
+  ];
+
+  function drawSticks() {
+    var i;
+    for (i = 0; i < sticks.length; i++) {
+      var s = sticks[i];
+      ctx.beginPath();
+      ctx.arc(s.cx, s.cy, s.r, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(16, 12, 10, 0.42)";
+      ctx.fill();
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = "rgba(230, 214, 180, 0.9)";
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(s.cx, s.cy, 16, 0, Math.PI * 2);
+      ctx.strokeStyle = "rgba(230, 214, 180, 0.35)";
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(s.cx + s.dx, s.cy + s.dy, 22, 0, Math.PI * 2);
+      ctx.fillStyle = s.pid !== null ? "rgba(240, 180, 70, 0.92)" : "rgba(244, 236, 220, 0.88)";
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = "#3a2414";
+      ctx.stroke();
+    }
+  }
+
+  function stickAt(x, y) {
+    var i;
+    for (i = 0; i < sticks.length; i++) {
+      var s = sticks[i];
+      if (planarDist(x, y, s.cx, s.cy) <= s.r) return s;
+    }
+    return null;
+  }
+
+  function aimStick(s, x, y) {
+    var dx = x - s.cx;
+    var dy = y - s.cy;
+    var dist = Math.sqrt(dx * dx + dy * dy);
+    var max = s.r - 22;
+    if (dist > max && dist > 0) {
+      dx = dx / dist * max;
+      dy = dy / dist * max;
+      dist = max;
+    }
+    s.dx = dx;
+    s.dy = dy;
+    if (dist < 10) {
+      s.nx = 0;
+      s.ny = 0;
+    } else {
+      s.nx = dx / dist;
+      s.ny = dy / dist;
+    }
+  }
+
+  function releaseStick(pid) {
+    var i;
+    for (i = 0; i < sticks.length; i++) {
+      if (sticks[i].pid === pid) {
+        sticks[i].pid = null;
+        sticks[i].dx = 0;
+        sticks[i].dy = 0;
+        sticks[i].nx = 0;
+        sticks[i].ny = 0;
+      }
+    }
+  }
+
+  canvas.addEventListener("pointerdown", function (e) {
+    if (isMenuState()) return;
+    var pt = canvasPoint(e);
+    if (!pt) return;
+    var s = stickAt(pt.x, pt.y);
+    if (!s || s.pid !== null) return;
+    e.preventDefault();
+    s.pid = e.pointerId;
+    try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
+    aimStick(s, pt.x, pt.y);
+  }, { passive: false });
+
+  canvas.addEventListener("pointermove", function (e) {
+    var i, s = null;
+    for (i = 0; i < sticks.length; i++) {
+      if (sticks[i].pid === e.pointerId) s = sticks[i];
+    }
+    if (!s) return;
+    e.preventDefault();
+    var pt = canvasPoint(e);
+    if (!pt) return;
+    aimStick(s, pt.x, pt.y);
+  }, { passive: false });
+
+  canvas.addEventListener("pointerup", function (e) { releaseStick(e.pointerId); });
+  canvas.addEventListener("pointercancel", function (e) { releaseStick(e.pointerId); });
+
+  function canvasPoint(e) {
+    var rect = canvas.getBoundingClientRect();
+    var fit = Math.min(rect.width / W, rect.height / H);
+    if (fit <= 0) return null;
+    var ox = (rect.width - W * fit) / 2;
+    var oy = (rect.height - H * fit) / 2;
+    return {
+      x: (e.clientX - rect.left - ox) / fit,
+      y: (e.clientY - rect.top - oy) / fit
+    };
+  }
+
+  canvas.addEventListener("mousedown", function (e) {
+    if (e.button !== 0) return;
+    var pt = canvasPoint(e);
+    if (!pt) return;
+    if (stickAt(pt.x, pt.y)) return;
+    var hi;
+    if (performance.now() < uiLatch || performance.now() - screenChangeAt < 50) return;
+    for (hi = hudHits.length - 1; hi >= 0; hi--) {
+      var zone = hudHits[hi];
+      if (pt.x >= zone.x && pt.x <= zone.x + zone.w && pt.y >= zone.y && pt.y <= zone.y + zone.h) {
+        uiLatch = performance.now() + 220;
+        zone.fn();
+        return;
+      }
+    }
+    var swordCandidates = activeFighters();
+    var swordF = null;
+    var si;
+    for (si = 0; si < swordCandidates.length; si++) {
+      var cand = swordCandidates[si];
+      if (cand.kit === "pain" && cand.hp > 0 && humanControls(cand) && cand.armor > 0) {
+        swordF = cand;
+        break;
+      }
+    }
+    if (!swordF || paused || matchState !== "fight" || koId) return;
+    var mx = pt.x;
+    var my = pt.y;
+    var x0 = swordF.x;
+    var y0 = swordF.y - 78;
+    var dx = mx - x0;
+    var dy = my - y0;
+    var len = Math.sqrt(dx * dx + dy * dy) || 1;
+    var speed = 1500;
+    swords.push({
+      x: x0,
+      y: y0,
+      vx: dx / len * speed,
+      vy: dy / len * speed,
+      life: 1.15,
+      hit: false,
+      owner: swordF.id
+    });
+  });
+
+  // Canvas UI handles intro / mode / charSelect / rematch hits via hudHits (mousedown + pointerdown).
+
+  canvas.addEventListener("pointerdown", function (e) {
+    if (matchState !== "intro" && matchState !== "mode" && matchState !== "charSelect" && matchState !== "result" && matchState !== "loading") return;
+    var pt = canvasPoint(e);
+    if (!pt) return;
+    var hi;
+    if (performance.now() < uiLatch || performance.now() - screenChangeAt < 50) return;
+    for (hi = hudHits.length - 1; hi >= 0; hi--) {
+      var zone = hudHits[hi];
+      if (pt.x >= zone.x && pt.x <= zone.x + zone.w && pt.y >= zone.y && pt.y <= zone.y + zone.h) {
+        uiLatch = performance.now() + 220;
+        e.preventDefault();
+        zone.fn();
+        return;
+      }
+    }
+  }, { passive: false });
+
+  window.__DUEL_DEBUG__ = function () {
+    return {
+      matchState: matchState,
+      gameMode: gameMode,
+      countdownPhase: countdownPhase,
+      countLeft: countLeft,
+      roundIndex: roundIndex,
+      roundBanner: roundBannerText(),
+      matchTime: matchTime,
+      practiceDummy: practiceDummy,
+      practiceNoCdAll: practiceNoCdAll,
+      selectedL: selectedL,
+      selectedR: selectedR,
+      selectedScrollL: selectedScrollL,
+      selectedScrollR: selectedScrollR,
+      fighters: activeFighters().map(function (f) {
+        return { id: f.id, name: f.name, kit: f.kit, hp: f.hp, hpChip: f.hpChip, x: f.x, y: f.y, team: teamOf(f), airH: f.airH || 0, airborne: !!f.airborne, pullOn: !!f.pullOn, repulseOn: !!f.repulseOn, anim: f.anim, knockPhase: f.knockPhase, knockT: f.knockT || 0, moveSpeed: f.moveSpeed, fireForm: !!f.fireForm, barrierT: f.barrierT || 0, chakra: f.chakra };
+      }),
+      roundWinsL: roundWinsL,
+      roundWinsR: roundWinsR,
+      koId: koId,
+      voidSpace: voidSpace,
+      selectedChar: selectedChar,
+      selectedScroll: selectedScroll,
+      voidT: voidT,
+      practicePanel: practicePanel,
+      leftKeys: leftOrder.map(function (id) { return left.skills[id] ? left.skills[id].key + ":" + id : "?"; }),
+      rightKeys: rightOrder.map(function (id) { return right.skills[id] ? right.skills[id].key + ":" + id : "?"; }),
+      facing: activeFighters().map(function (f) { return f.facing; }),
+      phase: activeFighters().map(function (f) { return f.phase || 0; }),
+      cds: activeFighters().map(function (f) { var o = {}, k; for (k in f.skills) o[k] = +(f.skills[k].cd || 0).toFixed(2); return o; }),
+      assets: { core: groupProgress(["core"]), obito: groupProgress(["obito"]), pain: groupProgress(["pain"]), tanjiro: groupProgress(["tanjiro"]), errors: assetErrors.slice(0, 5) },
+      loadMode: loadMode,
+      matchStall: matchStall,
+      sheetCount: sheetManifest ? Object.keys(sheetManifest.kits).length : 0,
+      coreReady: coreReady,
+      menuReady: coreAssetsReady(),
+      sheetSizes: Object.keys(sheetImgs).map(function (k) { var b = sheetImgs[k]._bmp; return k + ":" + (b ? b.width + "x" + b.height : "-"); }),
+      voidUntilLeft: voidSpace ? Math.max(0, (voidUntil - performance.now()) / 1000) : 0,
+      fightElapsed: matchState === "fight" ? fightClockElapsed() : 0,
+      assetV: ASSET_V
+    };
+  };
+  window.__DUEL_GOTO_SELECT__ = function (mode) {
+    gameMode = mode || "ai";
+    matchState = "charSelect";
+    syncFlowHint();
+    return true;
+  };
+  window.__DUEL_ASSET_LIST__ = function () {
+    var out = [], g, j;
+    for (g in ASSET_GROUPS) for (j = 0; j < ASSET_GROUPS[g].length; j++) out.push([g, ASSET_GROUPS[g][j]._src]);
+    return out;
+  };
+  window.__DUEL_PLACE__ = function (lx, rx) {
+    left.x = lx; right.x = rx; left.y = right.y = 530;
+    left.facing = 1; right.facing = -1;
+    left.hitPushVx = right.hitPushVx = 0;
+    left.stun = right.stun = 0; left.invuln = right.invuln = 0;
+    return true;
+  };
+  window.__DUEL_START__ = function (mode, me, ai) {
+    gameMode = mode || "ai";
+    selectedChar = me || "obito";
+    selectedScroll = SCROLL_DEFS[0].id;
+    window.__DUEL_AIKIT__ = ai || null;
+    practiceDummy = true;
+    practiceNoCdAll = false;
+    practiceNoCd = {};
+    beginMatch();
+    return matchState;
+  };
+  window.__DUEL_TEST_PULL__ = function (fid, lift) {
+    var f = activeFighters().filter(function (x) { return x.id === fid; })[0];
+    if (!f) return false;
+    if (lift) { f.airH = lift; f.airV = 200; f.airborne = true; }
+    castPull(f);
+    return true;
+  };
+  window.__DUEL_FORCE_COOP__ = function () {
+    gameMode = "coop";
+    selectedL = "obito";
+    selectedR = "pain";
+    selectedScrollL = SCROLL_DEFS[0].id;
+    selectedScrollR = SCROLL_DEFS[1].id;
+    beginMatch();
+  };
+  window.__DUEL_FORCE_PRACTICE__ = function () {
+    gameMode = "practice";
+    selectedChar = "obito";
+    selectedScroll = SCROLL_DEFS[0].id;
+    practiceDummy = true;
+    practiceNoCdAll = false;
+    practiceNoCd = {};
+    beginMatch();
+  };
+  window.__DUEL_FORCE_TANJIRO__ = function (opts) {
+    opts = opts || {};
+    gameMode = opts.mode || "practice";
+    selectedChar = "tanjiro";
+    selectedScroll = SCROLL_DEFS[0].id;
+    practiceDummy = true;
+    practiceNoCdAll = !!opts.noCd;
+    practiceNoCd = {};
+    beginMatch();
+    if (matchState === "loading") return window.__DUEL_DEBUG__();
+    // Skip countdown into fight
+    matchState = "fight";
+    countdownPhase = "fight";
+    countLeft = 0;
+    return window.__DUEL_DEBUG__();
+  };
+  window.__DUEL_CAST__ = function (fid, skillId) {
+    var f = activeFighters().filter(function (x) { return x.id === fid; })[0];
+    if (!f) return false;
+    tryCast(f, skillId);
+    return { anim: f.anim, fireForm: !!f.fireForm, busy: f.busy, chakra: f.chakra, kit: f.kit };
+  };
+  window.__DUEL_WAIT_FIGHT__ = function () {
+    matchState = "fight";
+    countdownPhase = "fight";
+    countLeft = 0;
+    return matchState;
+  };
+  window.__DUEL_FORCE_FIGHT__ = function () {
+    gameMode = "ai";
+    selectedChar = "obito";
+    selectedScroll = SCROLL_DEFS[0].id;
+    beginMatch();
+  };
+  window.__DUEL_HURT__ = function (fid, amount) {
+    var f = activeFighters().filter(function (x) { return x.id === fid; })[0];
+    if (!f) return false;
+    f.invuln = 0; f.phase = 0; f.shield = 0; f.hyperArmor = 0;
+    return hurt(f, amount, "#ffe7a0");
+  };
+  window.__DUEL_LAUNCH__ = function (fid) {
+    var f = activeFighters().filter(function (x) { return x.id === fid; })[0];
+    if (!f) return false;
+    f.invuln = 0; f.phase = 0; f.shield = 0; f.hyperArmor = 0;
+    return hurt(f, 30, "#ffe7a0"); // 20 after 2/3 >= LAUNCH_DMG 12
+  };
+
+  reset();
+  syncFlowHint();
+
+  // pages23: load atlas manifest, then core images. Kit sheets register on demand.
+  (function bootAssets() {
+    // Menu art first (cards + scroll icons were enqueued at registration); stage/portraits follow.
+    ensureGroups(["core"], "core");
+    fetch(assetUrl("sheets/manifest.json"))
+      .then(function (r) { if (!r.ok) throw new Error("manifest " + r.status); return r.json(); })
+      .then(function (m) {
+        sheetManifest = m;
+        var t = setInterval(function () {
+          var c = groupProgress(["core"]);
+          if (c.done + c.err < c.tot) return;
+          clearInterval(t);
+          coreReady = true;
+          if (loadMode === "match") return;
+          ["obito", "pain", "tanjiro"].forEach(function (k) { registerKitSheets(k); });
+          loadMode = "prefetch";
+          ensureGroups(["obito", "pain", "tanjiro"], "prefetch");
+        }, 200);
+      })
+      .catch(function (e) { if (window.console) console.error("[manifest]", e); });
+  })();
+
+  requestAnimationFrame(frame);
+})();
