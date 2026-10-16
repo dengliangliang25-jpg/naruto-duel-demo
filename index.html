@@ -150,7 +150,7 @@
   sharinganImg.src = "sharingan.png";
 
   // Bump when sprite PNGs change so browsers/CDN do not serve stale frames.
-  var ASSET_V = "pages16";
+  var ASSET_V = "pages17";
   function loadStrip(prefix, count, folder) {
     var arr = [];
     var i;
@@ -171,7 +171,8 @@
     firebreath: loadStrip("fire", 32, "obito/firebreath"),
     phase: loadStrip("phase", 8),
     tele: loadStrip("tele", 8),
-    punch: loadStrip("punch", 8)
+    punch: loadStrip("punch", 8),
+    cloth: loadStrip("cloth", 12, "obito/cloth_float")
   };
   // Body-height match (obito 180px, pain 143px) then both shrunk by the same
   // 0.72, then another 0.88 (same for both) so they sit smaller on the expanded field.
@@ -207,8 +208,17 @@
     push: loadStrip("push", 6, "pain"),
     repulse: loadStrip("repulse", 20, "pain/repulse"),
     pullCast: loadStrip("cast", 24, "pain/pull"),
-    pullFx: loadStrip("fx", 24, "pain/pull")
+    pullFx: loadStrip("fx", 24, "pain/pull"),
+    cloth: loadStrip("cloth", 12, "pain/cloth_float")
   };
+  var clothFps = 9;
+  function plantCaster(f) {
+    f.airH = 0;
+    f.airV = 0;
+    f.airborne = false;
+    f.launchVx = 0;
+    f.launchVy = 0;
+  }
   // Repulsion sheet: frames 1-12 are F05-F16, 13-20 are F17-F24. Play once, no loop.
   // 16 fps (was 12) shortens the wind-up; short press still ends on F16, long on F24.
   var repulseFps = 16;
@@ -1538,6 +1548,7 @@
     f.shield = 0;
     f.shieldWind = repulseWind;
     f.repulseOn = true;
+    plantCaster(f);
     f.repulseT = 0;
     f.repulseLong = true;
     f.shieldPlan = repulseSpan(true) - repulseWind;
@@ -1584,6 +1595,7 @@
     f.pullAnimT = 0;
     f.pullApplied = false;
     f.pullFx = pullCastSpan;
+    plantCaster(f);
   }
 
   function applyPullGrab(f) {
@@ -2021,6 +2033,8 @@
       if (f.busy > 0) f.busy = Math.max(0, f.busy - dt);
       if (f.hitShake > 0) f.hitShake = Math.max(0, f.hitShake - dt);
 
+      // Skill casters keep both feet on the ground (no launch/jump offsets mid-cast).
+      if (f.pullOn || f.repulseOn || (f.shieldWind || 0) > 0) plantCaster(f);
       if (isAirborne(f)) {
         f.dashT = 0;
         f.gait = "idle";
@@ -2786,6 +2800,10 @@
     } else {
       set = obito.idle;
       idx = 0;
+      if (obito.cloth[0] && obito.cloth[0].complete && obito.cloth[0].naturalWidth > 0) {
+        set = obito.cloth;
+        idx = Math.floor(time * clothFps) % 12;
+      }
     }
     var phased = f.phase > 0;
     if (phased) alpha = 0.45;
@@ -2886,7 +2904,7 @@
   // Native facing of each pain strip: idle (and the repulse sheet) is drawn facing
   // left, while run/walk/dash/back and the attack strips are drawn facing right.
   function painNativeLeft(set) {
-    return set === pain.idle || set === pain.turn;
+    return set === pain.idle || set === pain.turn || set === pain.cloth;
   }
 
   function drawPainAt(x, groundY, facing, set, index, alpha, footDrop, tilt, shakeAmp) {
@@ -2918,14 +2936,14 @@
       var pidx = Math.floor((f.pullAnimT || 0) * pullCastFps);
       if (pidx < 0) pidx = 0;
       if (pidx > 23) pidx = 23;
-      if (drawPainPullCast(f.x, f.y - (f.airH || 0), f.facing, pidx, 1)) return;
+      if (drawPainPullCast(f.x, f.y, f.facing, pidx, 1)) return;
     }
     if (f.repulseOn && !isAirborne(f) && !isDowned(f) && !(f.hitLight && (f.stun || 0) > 0)) {
       var last = f.repulseLong === false ? 11 : 19;
       var ridx = Math.floor((f.repulseT || 0) * repulseFps);
       if (ridx < 0) ridx = 0;
       if (ridx > last) ridx = last;
-      if (drawPainRepulse(f.x, f.y - (f.airH || 0), f.facing, ridx, 1)) return;
+      if (drawPainRepulse(f.x, f.y, f.facing, ridx, 1)) return;
     }
     var set = pain.idle;
     var idx = 0;
@@ -2963,6 +2981,10 @@
     } else {
       set = pain.idle;
       idx = 0;
+      if (pain.cloth[0] && pain.cloth[0].complete && pain.cloth[0].naturalWidth > 0) {
+        set = pain.cloth;
+        idx = Math.floor(time * clothFps) % 12;
+      }
     }
     if (f.invuln > 0 && !isDowned(f) && !isAirborne(f) && Math.sin(time * 40) > 0) alpha *= 0.45;
     var footDrop = 0;
@@ -4914,13 +4936,20 @@
       selectedScrollL: selectedScrollL,
       selectedScrollR: selectedScrollR,
       fighters: activeFighters().map(function (f) {
-        return { id: f.id, name: f.name, kit: f.kit, hp: f.hp, x: f.x, y: f.y, team: teamOf(f) };
+        return { id: f.id, name: f.name, kit: f.kit, hp: f.hp, x: f.x, y: f.y, team: teamOf(f), airH: f.airH || 0, airborne: !!f.airborne, pullOn: !!f.pullOn, repulseOn: !!f.repulseOn, anim: f.anim };
       }),
       roundWinsL: roundWinsL,
       roundWinsR: roundWinsR,
       koId: koId,
       assetV: ASSET_V
     };
+  };
+  window.__DUEL_TEST_PULL__ = function (fid, lift) {
+    var f = activeFighters().filter(function (x) { return x.id === fid; })[0];
+    if (!f) return false;
+    if (lift) { f.airH = lift; f.airV = 200; f.airborne = true; }
+    castPull(f);
+    return true;
   };
   window.__DUEL_FORCE_COOP__ = function () {
     gameMode = "coop";
