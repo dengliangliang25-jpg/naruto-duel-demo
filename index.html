@@ -59,8 +59,9 @@
   var countLeft = 3;
   var matchTime = 60;
   var matchResult = null;
-  var gameMode = "ai"; // ai | vs
+  var gameMode = "ai"; // ai | vs | coop
   var playerSide = "L"; // which side the human controls in AI mode
+  var coopAiKits = ["pain", "obito"]; // filled on beginMatch
   var selectedChar = "obito"; // roster id chosen in char select (solo)
   var selectedL = null; // 2P left pick
   var selectedR = null; // 2P right pick
@@ -75,7 +76,7 @@
     var i;
     for (i = 0; i < ids.length; i++) {
       var img = new Image();
-      img.src = "cards/" + ids[i] + ".png?v=" + "pages15";
+      img.src = "cards/" + ids[i] + ".png?v=" + "pages16";
       cardImgs[ids[i]] = img;
     }
   })();
@@ -90,7 +91,7 @@
     var i;
     for (i = 0; i < SCROLL_DEFS.length; i++) {
       var img = new Image();
-      img.src = SCROLL_DEFS[i].icon + "?v=" + "pages15";
+      img.src = SCROLL_DEFS[i].icon + "?v=" + "pages16";
       scrollImgs[SCROLL_DEFS[i].id] = img;
     }
   })();
@@ -149,7 +150,7 @@
   sharinganImg.src = "sharingan.png";
 
   // Bump when sprite PNGs change so browsers/CDN do not serve stale frames.
-  var ASSET_V = "pages15";
+  var ASSET_V = "pages16";
   function loadStrip(prefix, count, folder) {
     var arr = [];
     var i;
@@ -342,8 +343,33 @@
     cleave: { key: "K", name: "重脚", role: "平A", cd: 0, max: 0.9, cost: 8 }
   };
 
+
+  // Coop 2v2 partners (inactive unless gameMode === "coop")
+  var left2 = makeFighter("L2", "带土", 460, {
+    body: "#24315c",
+    trim: "#e8e4f2",
+    glow: "#9eb6ff",
+    deep: "#14182c",
+    hot: "#f0d2c0"
+  });
+  var right2 = makeFighter("R2", "橙发", 940, {
+    body: "#2c2428",
+    trim: "#ff7a3a",
+    glow: "#ffb067",
+    deep: "#1a1214",
+    hot: "#ff8a3a"
+  });
+  left2.kit = "obito";
+  right2.kit = "pain";
+  left2.moveSpeed = 420;
+  right2.moveSpeed = 336;
+  left2.skills = {};
+  right2.skills = {};
+
   var leftOrder = ["punch", "phase", "tele", "breath", "space"];
   var rightOrder = ["thrust", "fire", "swap", "spike", "pull", "cleave"];
+  var left2Order = ["punch", "phase", "tele", "breath", "space"];
+  var right2Order = ["thrust", "fire", "swap", "spike", "pull", "cleave"];
 
   var KIT_DEFS = {
     obito: {
@@ -432,15 +458,29 @@
     var rightKeys = ["u", "i", "o", "p", "j", "k", "l"];
     var map = {};
     var i, labels;
+    var p2 = isCoop() ? left2 : right;
+    var p2Order = isCoop() ? left2Order : rightOrder;
+    var p2Id = isCoop() ? "L2" : "R";
     labels = sideKeyLabels("L", leftOrder.length);
     for (i = 0; i < leftOrder.length; i++) {
       map[leftKeys[i]] = ["L", leftOrder[i]];
       if (left.skills[leftOrder[i]]) left.skills[leftOrder[i]].key = labels[i];
     }
-    labels = sideKeyLabels("R", rightOrder.length);
-    for (i = 0; i < rightOrder.length; i++) {
-      map[rightKeys[i]] = ["R", rightOrder[i]];
-      if (right.skills[rightOrder[i]]) right.skills[rightOrder[i]].key = labels[i];
+    labels = sideKeyLabels("R", p2Order.length);
+    for (i = 0; i < p2Order.length; i++) {
+      map[rightKeys[i]] = [p2Id, p2Order[i]];
+      if (p2.skills[p2Order[i]]) p2.skills[p2Order[i]].key = labels[i];
+    }
+    if (isCoop()) {
+      // Keep AI skill key labels for HUD (not bound to keys)
+      labels = sideKeyLabels("R", rightOrder.length);
+      for (i = 0; i < rightOrder.length; i++) {
+        if (right.skills[rightOrder[i]]) right.skills[rightOrder[i]].key = labels[i];
+      }
+      labels = sideKeyLabels("R", right2Order.length);
+      for (i = 0; i < right2Order.length; i++) {
+        if (right2.skills[right2Order[i]]) right2.skills[right2Order[i]].key = labels[i];
+      }
     }
     controlMap = map;
   }
@@ -485,66 +525,250 @@
     rebuildControlMap();
   }
 
+  function applyCoopMatchKits(kitP1, kitP2, kitA1, kitA2, scrollP1, scrollP2, scrollA1, scrollA2) {
+    applySideKit(left, kitP1 || "obito");
+    applySideKit(left2, kitP2 || "pain");
+    applySideKit(right, kitA1 || "pain");
+    applySideKit(right2, kitA2 || "obito");
+    leftOrder = KIT_DEFS[left.kit].order.slice();
+    left2Order = KIT_DEFS[left2.kit].order.slice();
+    rightOrder = KIT_DEFS[right.kit].order.slice();
+    right2Order = KIT_DEFS[right2.kit].order.slice();
+    leftOrder = attachScrollSkill(left, leftOrder, scrollP1, "V");
+    left2Order = attachScrollSkill(left2, left2Order, scrollP2, "L");
+    rightOrder = attachScrollSkill(right, rightOrder, scrollA1, "L");
+    right2Order = attachScrollSkill(right2, right2Order, scrollA2, "L");
+    rebuildControlMap();
+  }
+
   function fighterByKit(kitId) {
-    if (left.kit === kitId) return left;
-    if (right.kit === kitId) return right;
+    var all = activeFighters();
+    var i;
+    for (i = 0; i < all.length; i++) if (all[i].kit === kitId) return all[i];
     return null;
   }
 
   function isObito(f) { return f && f.kit === "obito"; }
   function isPain(f) { return f && f.kit === "pain"; }
 
-  function other(f) { return f.id === "L" ? right : left; }
+  function isCoop() { return gameMode === "coop"; }
+
+  function activeFighters() {
+    if (isCoop()) return [left, left2, right, right2];
+    return [left, right];
+  }
+
+  function teamOf(f) {
+    if (!f) return null;
+    if (f.id === "L" || f.id === "L2") return "L";
+    return "R";
+  }
+
+  function fighterByOwner(id) {
+    if (id === "L") return left;
+    if (id === "R") return right;
+    if (id === "L2") return left2;
+    if (id === "R2") return right2;
+    return null;
+  }
+
+  function livingEnemies(f) {
+    var t = teamOf(f);
+    var all = activeFighters();
+    var out = [];
+    var i;
+    for (i = 0; i < all.length; i++) {
+      if (teamOf(all[i]) !== t && all[i].hp > 0) out.push(all[i]);
+    }
+    return out;
+  }
+
+  function nearestEnemy(f) {
+    var enemies = livingEnemies(f);
+    var i;
+    if (!enemies.length) {
+      var all = activeFighters();
+      for (i = 0; i < all.length; i++) {
+        if (teamOf(all[i]) !== teamOf(f)) enemies.push(all[i]);
+      }
+    }
+    if (!enemies.length) return f === left ? right : left;
+    var best = enemies[0];
+    var bestD = 1e12;
+    for (i = 0; i < enemies.length; i++) {
+      var dx = enemies[i].x - f.x;
+      var dy = enemies[i].y - f.y;
+      var d = dx * dx + dy * dy;
+      if (d < bestD) { bestD = d; best = enemies[i]; }
+    }
+    return best;
+  }
+
+  function other(f) { return nearestEnemy(f); }
+
+  function livingHumans() {
+    var all = activeFighters();
+    var out = [];
+    var i;
+    for (i = 0; i < all.length; i++) {
+      if (humanControls(all[i]) && all[i].hp > 0) out.push(all[i]);
+    }
+    return out;
+  }
+
+  function nearestHuman(f) {
+    var humans = livingHumans();
+    var i;
+    if (!humans.length) return nearestEnemy(f);
+    var best = humans[0];
+    var bestD = 1e12;
+    for (i = 0; i < humans.length; i++) {
+      var dx = humans[i].x - f.x;
+      var dy = humans[i].y - f.y;
+      var d = dx * dx + dy * dy;
+      if (d < bestD) { bestD = d; best = humans[i]; }
+    }
+    return best;
+  }
+
+  function projectileOwner(ownerId) {
+    return fighterByOwner(ownerId) || left;
+  }
+
+  function projectileFoe(ownerId, px, py) {
+    var owner = projectileOwner(ownerId);
+    var enemies = livingEnemies(owner);
+    var i;
+    if (!enemies.length) return nearestEnemy(owner);
+    if (px == null) return nearestEnemy(owner);
+    var best = enemies[0];
+    var bestD = 1e12;
+    for (i = 0; i < enemies.length; i++) {
+      var dx = enemies[i].x - px;
+      var dy = (enemies[i].y - 74) - py;
+      var d = dx * dx + dy * dy;
+      if (d < bestD) { bestD = d; best = enemies[i]; }
+    }
+    return best;
+  }
+
+  function teamAlive(side) {
+    var all = activeFighters();
+    var i;
+    for (i = 0; i < all.length; i++) {
+      if (teamOf(all[i]) === side && all[i].hp > 0) return true;
+    }
+    return false;
+  }
+
+  function teamHp(side) {
+    var all = activeFighters();
+    var sum = 0;
+    var i;
+    for (i = 0; i < all.length; i++) {
+      if (teamOf(all[i]) === side) sum += Math.max(0, all[i].hp);
+    }
+    return sum;
+  }
+
+  function declareKoWinner(winnerSide) {
+    koId = winnerSide;
+    finishRound(winnerSide);
+  }
+
+  function onFighterKilled(target) {
+    if (isCoop()) {
+      var deadTeam = teamOf(target);
+      if (!teamAlive(deadTeam)) declareKoWinner(deadTeam === "L" ? "R" : "L");
+      return;
+    }
+    declareKoWinner(target.id === "L" ? "R" : "L");
+  }
+
+  function unlockedKitIds() {
+    var ids = [];
+    var i;
+    for (i = 0; i < charRoster.length; i++) {
+      if (charRoster[i].unlocked) ids.push(charRoster[i].id);
+    }
+    return ids.length ? ids : ["obito", "pain"];
+  }
+
+  function pickRandomKit() {
+    var ids = unlockedKitIds();
+    return ids[Math.floor(Math.random() * ids.length)];
+  }
+
+  function resetOneFighter(f, facing) {
+    f.facing = facing;
+    f.hp = f.maxHp;
+    f.chakra = f.maxChakra;
+    f.anim = "idle";
+    f.busy = 0;
+    f.dashT = 0;
+    f.flash = 0;
+    f.invuln = 0;
+    f.phase = 0;
+    f.hurt = 0;
+    f.stun = 0;
+    f.airH = 0;
+    f.airV = 0;
+    f.launchVx = 0;
+    f.launchVy = 0;
+    f.airborne = false;
+    f.hitLean = 0;
+    f.hitLeanDir = facing;
+    f.hitPushVx = 0;
+    f.hitPushVy = 0;
+    f.hitShake = 0;
+    f.hitLight = false;
+    f.downT = 0;
+    f.downMax = 0;
+    f.getUpT = 0;
+    f.getUpMax = 0;
+    f.hitPending = false;
+    f.aiIx = 0;
+    f.aiIy = 0;
+    f.aiThink = 0;
+    var k;
+    for (k in f.skills) f.skills[k].cd = 0;
+    f.shield = 0;
+    f.shieldKey = false;
+    f.shieldHit = false;
+    f.armor = 0;
+    f.hyperArmor = 0;
+    f.chakraLock = 0;
+    f.rooted = 0;
+    f.pullT = 0;
+    f.pullFx = 0;
+    f.pullOn = false;
+    f.pullAnimT = 0;
+    f.pullApplied = false;
+    f.shieldWind = 0;
+    f.repulseOn = false;
+    f.repulseT = 0;
+    f.repulseLong = false;
+  }
 
   function reset() {
-    left.x = 420;
-    right.x = 860;
-    left.y = 530;
-    right.y = 530;
-    left.facing = 1;
-    right.facing = -1;
-    left.hp = left.maxHp;
-    right.hp = right.maxHp;
-    left.chakra = left.maxChakra;
-    right.chakra = right.maxChakra;
-    left.anim = "idle";
-    right.anim = "idle";
-    left.busy = right.busy = 0;
-    left.dashT = right.dashT = 0;
-    left.flash = right.flash = 0;
-    left.invuln = right.invuln = 0;
-    left.phase = right.phase = 0;
-    left.hurt = right.hurt = 0;
-    left.stun = right.stun = 0;
-    left.airH = right.airH = 0;
-    left.airV = right.airV = 0;
-    left.launchVx = right.launchVx = 0;
-    left.launchVy = right.launchVy = 0;
-    left.airborne = right.airborne = false;
-    left.hitLean = right.hitLean = 0;
-    left.hitLeanDir = 1;
-    right.hitLeanDir = -1;
-    left.hitPushVx = right.hitPushVx = 0;
-    left.hitPushVy = right.hitPushVy = 0;
-    left.hitShake = right.hitShake = 0;
-    left.hitLight = right.hitLight = false;
-    left.downT = right.downT = 0;
-    left.downMax = right.downMax = 0;
-    left.getUpT = right.getUpT = 0;
-    left.getUpMax = right.getUpMax = 0;
-    left.hitPending = right.hitPending = false;
-    left.aiIx = right.aiIx = 0;
-    left.aiIy = right.aiIy = 0;
-    left.aiThink = right.aiThink = 0;
-    var k;
-    for (k in left.skills) left.skills[k].cd = 0;
-    for (k in right.skills) right.skills[k].cd = 0;
+    if (isCoop()) {
+      left.x = 340; left.y = 500;
+      left2.x = 460; left2.y = 560;
+      right.x = 820; right.y = 500;
+      right2.x = 940; right2.y = 560;
+      resetOneFighter(left, 1);
+      resetOneFighter(left2, 1);
+      resetOneFighter(right, -1);
+      resetOneFighter(right2, -1);
+    } else {
+      left.x = 420; left.y = 530;
+      right.x = 860; right.y = 530;
+      resetOneFighter(left, 1);
+      resetOneFighter(right, -1);
+    }
     projectiles.length = 0;
     spikes.length = 0;
     bursts.length = 0;
-    left.shield = right.shield = 0;
-    left.shieldKey = right.shieldKey = false;
-    left.shieldHit = right.shieldHit = false;
     ghosts.length = 0;
     rings.length = 0;
     sparks.length = 0;
@@ -554,20 +778,7 @@
     shake = 0;
     koId = null;
     voidSpace = false;
-    left.armor = right.armor = 0;
-    left.hyperArmor = right.hyperArmor = 0;
-    left.chakraLock = right.chakraLock = 0;
     phaseSlow = 0;
-    left.rooted = right.rooted = 0;
-    left.pullT = right.pullT = 0;
-    left.pullFx = right.pullFx = 0;
-    left.pullOn = right.pullOn = false;
-    left.pullAnimT = right.pullAnimT = 0;
-    left.pullApplied = right.pullApplied = false;
-    left.shieldWind = right.shieldWind = 0;
-    left.repulseOn = right.repulseOn = false;
-    left.repulseT = right.repulseT = 0;
-    left.repulseLong = right.repulseLong = false;
   }
 
   function spawnFloater(x, y, text, color) {
@@ -643,10 +854,7 @@
         facing: target.facing || 1,
         scale: 1.1
       });
-      if (target.hp <= 0) {
-        koId = target.id === "L" ? "R" : "L";
-        finishRound(koId);
-      }
+      if (target.hp <= 0) onFighterKilled(target);
       return true;
     }
     var stunDur = 0.08 + amount * 0.035;
@@ -735,10 +943,7 @@
         target.launchVy = 0;
       }
     }
-    if (target.hp <= 0) {
-      koId = target.id === "L" ? "R" : "L";
-      finishRound(koId);
-    }
+    if (target.hp <= 0) onFighterKilled(target);
     return true;
   }
 
@@ -830,7 +1035,7 @@
   function goCharSelect() {
     matchState = "charSelect";
     paused = false;
-    if (gameMode === "vs") {
+    if (gameMode === "vs" || gameMode === "coop") {
       selectedL = null;
       selectedR = null;
       selectedScrollL = null;
@@ -889,7 +1094,22 @@
     roundWinsR = 0;
     matchWinner = null;
     matchResult = null;
-    if (gameMode === "vs") {
+    if (gameMode === "coop") {
+      playerSide = "L";
+      coopAiKits = [pickRandomKit(), pickRandomKit()];
+      var scrollP1 = selectedScrollL || SCROLL_DEFS[0].id;
+      var scrollP2 = selectedScrollR || SCROLL_DEFS[1].id;
+      applyCoopMatchKits(
+        selectedL || "obito",
+        selectedR || "pain",
+        coopAiKits[0],
+        coopAiKits[1],
+        scrollP1,
+        scrollP2,
+        pickAiScroll(scrollP1),
+        pickAiScroll(scrollP2)
+      );
+    } else if (gameMode === "vs") {
       playerSide = "L"; // both human; sticks stay L/R
       applyMatchKits(
         selectedL || "obito",
@@ -957,6 +1177,7 @@
 
   function humanControls(f) {
     if (gameMode === "vs") return true;
+    if (gameMode === "coop") return f.id === "L" || f.id === "L2";
     return f.id === playerSide;
   }
 
@@ -969,12 +1190,21 @@
   }
 
   function endByTime() {
+    if (isCoop()) {
+      var hpL = teamHp("L");
+      var hpR = teamHp("R");
+      if (hpL > hpR) finishRound("L");
+      else if (hpR > hpL) finishRound("R");
+      else finishRound("draw");
+      return;
+    }
     if (left.hp > right.hp) finishRound("L");
     else if (right.hp > left.hp) finishRound("R");
     else finishRound("draw");
   }
 
   function tryCast(f, id) {
+    if (!f || f.hp <= 0) return;
     if (paused || matchState !== "fight" || koId || (f.stun || 0) > 0 || isAirborne(f)) return;
     var sk = f.skills[id];
     if (!sk || sk.cd > 0) return;
@@ -1528,7 +1758,7 @@
     }
     var ix = 0;
     var iy = 0;
-    if (gameMode === "ai" && !humanControls(f)) {
+    if (!humanControls(f)) {
       // AI still acts in void space — no special freeze when voidSpace is on.
       ix = f.aiIx || 0;
       iy = f.aiIy || 0;
@@ -1569,10 +1799,10 @@
     f.y = step.y;
   }
 
-  function updateAI(dt) {
-    if (gameMode !== "ai" || matchState !== "fight" || koId) return;
-    var f = aiFighter();
-    var opp = humanFighter();
+  function updateOneAI(f, dt) {
+    if (!f || f.hp <= 0) return;
+    var opp = isCoop() ? nearestHuman(f) : (gameMode === "ai" ? humanFighter() : nearestEnemy(f));
+    if (!opp) return;
     if ((f.stun || 0) > 0 || f.rooted > 0 || f.pullT > 0 || isAirborne(f) || isDowned(f)) {
       f.aiIx = 0;
       f.aiIy = 0;
@@ -1607,44 +1837,44 @@
     if (f.aiThink > 0) return;
     f.aiThink = 0.18 + Math.random() * 0.22;
     if (isPain(f)) {
-      if (dist < 130 && f.skills.thrust.cd <= 0 && f.chakra >= (f.skills.thrust.cost || 0)) {
+      if (dist < 130 && f.skills.thrust && f.skills.thrust.cd <= 0 && f.chakra >= (f.skills.thrust.cost || 0)) {
         tryCast(f, "thrust");
         return;
       }
-      if (dist < 150 && f.skills.cleave.cd <= 0 && f.chakra >= (f.skills.cleave.cost || 0) && Math.random() < 0.55) {
+      if (dist < 150 && f.skills.cleave && f.skills.cleave.cd <= 0 && f.chakra >= (f.skills.cleave.cost || 0) && Math.random() < 0.55) {
         tryCast(f, "cleave");
         return;
       }
-      if (dist > 160 && dist < 520 && f.skills.fire.cd <= 0 && f.chakra >= (f.skills.fire.cost || 0) && Math.random() < 0.45) {
+      if (dist > 160 && dist < 520 && f.skills.fire && f.skills.fire.cd <= 0 && f.chakra >= (f.skills.fire.cost || 0) && Math.random() < 0.45) {
         tryCast(f, "fire");
         return;
       }
-      if (dist < 110 && f.skills.swap.cd <= 0 && f.chakra >= (f.skills.swap.cost || 0) && Math.random() < 0.35) {
+      if (dist < 110 && f.skills.swap && f.skills.swap.cd <= 0 && f.chakra >= (f.skills.swap.cost || 0) && Math.random() < 0.35) {
         tryCast(f, "swap");
         return;
       }
-      if (dist > 90 && dist < 420 && f.skills.pull.cd <= 0 && f.chakra >= (f.skills.pull.cost || 0) && Math.random() < 0.28) {
+      if (dist > 90 && dist < 420 && f.skills.pull && f.skills.pull.cd <= 0 && f.chakra >= (f.skills.pull.cost || 0) && Math.random() < 0.28) {
         tryCast(f, "pull");
         return;
       }
-      if (dist < 150 && f.skills.spike.cd <= 0 && f.chakra >= (f.skills.spike.cost || 0) && Math.random() < 0.18) {
+      if (dist < 150 && f.skills.spike && f.skills.spike.cd <= 0 && f.chakra >= (f.skills.spike.cost || 0) && Math.random() < 0.18) {
         tryCast(f, "spike");
         return;
       }
     } else {
-      if (dist < 130 && f.skills.punch.cd <= 0) {
+      if (dist < 130 && f.skills.punch && f.skills.punch.cd <= 0) {
         tryCast(f, "punch");
         return;
       }
-      if (dist > 140 && dist < 420 && f.skills.breath.cd <= 0 && f.chakra >= (f.skills.breath.cost || 0) && Math.random() < 0.4) {
+      if (dist > 140 && dist < 420 && f.skills.breath && f.skills.breath.cd <= 0 && f.chakra >= (f.skills.breath.cost || 0) && Math.random() < 0.4) {
         tryCast(f, "breath");
         return;
       }
-      if (dist > 100 && dist < 360 && f.skills.tele.cd <= 0 && f.chakra >= (f.skills.tele.cost || 0) && Math.random() < 0.35) {
+      if (dist > 100 && dist < 360 && f.skills.tele && f.skills.tele.cd <= 0 && f.chakra >= (f.skills.tele.cost || 0) && Math.random() < 0.35) {
         tryCast(f, "tele");
         return;
       }
-      if (dist < 160 && f.skills.phase.cd <= 0 && f.chakra >= (f.skills.phase.cost || 0) && f.phase <= 0 && Math.random() < 0.22) {
+      if (dist < 160 && f.skills.phase && f.skills.phase.cd <= 0 && f.chakra >= (f.skills.phase.cost || 0) && f.phase <= 0 && Math.random() < 0.22) {
         tryCast(f, "phase");
         return;
       }
@@ -1659,14 +1889,32 @@
     }
   }
 
+  function updateAI(dt) {
+    if (matchState !== "fight" || koId) return;
+    if (gameMode === "vs") return;
+    if (gameMode === "coop") {
+      updateOneAI(right, dt);
+      updateOneAI(right2, dt);
+      return;
+    }
+    updateOneAI(aiFighter(), dt);
+  }
+
   function update(dt) {
     time += dt;
     if (shake > 0) shake = Math.max(0, shake - dt * 18);
 
-    var roster = [left, right];
+    var roster = activeFighters();
     var i;
     for (i = 0; i < roster.length; i++) {
       var f = roster[i];
+      if (f.hp <= 0) {
+        f.gait = "idle";
+        f.dashT = 0;
+        f.aiIx = 0;
+        f.aiIy = 0;
+        continue;
+      }
       var sk;
       for (sk in f.skills) {
         if (f.skills[sk].cd > 0) f.skills[sk].cd = Math.max(0, f.skills[sk].cd - dt);
@@ -1900,20 +2148,28 @@
       }
     }
 
-    if (koId == null && left.dashT <= 0 && right.dashT <= 0 && !isAirborne(left) && !isAirborne(right)) {
-      var sdx = right.x - left.x;
-      var sdy = right.y - left.y;
-      var ad = Math.sqrt(sdx * sdx + sdy * sdy);
-      if (ad < 46 && ad > 0.01) {
-        var push = (46 - ad) * 0.5;
-        var nx = sdx / ad;
-        var ny = sdy / ad;
-        var ls = clampSpot(left.x - nx * push, left.y - ny * push);
-        var rs = clampSpot(right.x + nx * push, right.y + ny * push);
-        left.x = ls.x;
-        left.y = ls.y;
-        right.x = rs.x;
-        right.y = rs.y;
+    if (koId == null) {
+      var sep = activeFighters();
+      var a, b, sdx, sdy, ad, push, nx, ny, ls, rs;
+      for (a = 0; a < sep.length; a++) {
+        if (sep[a].hp <= 0 || sep[a].dashT > 0 || isAirborne(sep[a])) continue;
+        for (b = a + 1; b < sep.length; b++) {
+          if (sep[b].hp <= 0 || sep[b].dashT > 0 || isAirborne(sep[b])) continue;
+          sdx = sep[b].x - sep[a].x;
+          sdy = sep[b].y - sep[a].y;
+          ad = Math.sqrt(sdx * sdx + sdy * sdy);
+          if (ad < 46 && ad > 0.01) {
+            push = (46 - ad) * 0.5;
+            nx = sdx / ad;
+            ny = sdy / ad;
+            ls = clampSpot(sep[a].x - nx * push, sep[a].y - ny * push);
+            rs = clampSpot(sep[b].x + nx * push, sep[b].y + ny * push);
+            sep[a].x = ls.x;
+            sep[a].y = ls.y;
+            sep[b].x = rs.x;
+            sep[b].y = rs.y;
+          }
+        }
       }
     }
 
@@ -1922,13 +2178,13 @@
       p.life -= dt;
       if (p.kind === "firebreath") {
         p.age = (p.age || 0) + dt;
-        var ownerFb = p.owner === "L" ? left : right;
+        var ownerFb = projectileOwner(p.owner);
         var dirFb = ownerFb.facing < 0 ? -1 : 1;
         p.facing = ownerFb.facing;
         // Keep the flame tip glued to Obito's mouth.
         p.x = ownerFb.x + dirFb * 26;
         p.y = ownerFb.y - 118;
-        var targetFb = p.owner === "L" ? right : left;
+        var targetFb = projectileFoe(p.owner, p.x + dirFb * 200, p.y);
         var prog = p.age / 1.6;
         if (prog > 1) prog = 1;
         // Reach grows as the stream extends; scaled to half with the smaller VFX.
@@ -1941,7 +2197,7 @@
         if (inBeam && !p.hit && prog > 0.12) {
           if (targetFb.phase > 0 || targetFb.invuln > 0) {
             /* phased: breath passes through */
-          } else if (hurt(targetFb, p.dmg, p.owner === "L" ? left.palette.glow : right.palette.glow)) {
+          } else if (hurt(targetFb, p.dmg, ownerFb.palette.glow)) {
             p.hit = true;
             rings.push({ x: targetFb.x, y: targetFb.y, life: 0.28, max: 0.28, color: "#ff8a3a" });
           }
@@ -1958,25 +2214,35 @@
         u = 1 - (1 - u) * (1 - u);
         p.scale = 0.28 + 2.495 * u;
       }
-      var target = p.owner === "L" ? right : left;
-      var chestY = target.y - (p.kind === "fire" ? 78 : 74);
-      var hitR = p.kind === "fire" ? 28 * (p.scale || 0.28) : (p.kind === "push" ? 46 : (p.kind === "rod" ? 22 : (p.kind === "wave" ? 28 : 20)));
-      if (planarDist(p.x, p.y, target.x, chestY) < hitR) {
-        if (target.phase > 0 || target.invuln > 0) {
-          /* ethereal: projectile passes through and is not a hit */
-        } else if (hurt(target, p.dmg, p.owner === "L" ? left.palette.glow : right.palette.glow)) {
-          if (p.kind === "push") {
-            var away = p.vx < 0 ? -1 : 1;
-            var shoved = clampSpot(target.x + away * 110, target.y);
-            target.x = shoved.x;
-            target.y = shoved.y;
+      var ownerProj = projectileOwner(p.owner);
+      var enemiesHit = livingEnemies(ownerProj);
+      var ei;
+      var hitAny = false;
+      for (ei = 0; ei < enemiesHit.length; ei++) {
+        var target = enemiesHit[ei];
+        var chestY = target.y - (p.kind === "fire" ? 78 : 74);
+        var hitR = p.kind === "fire" ? 28 * (p.scale || 0.28) : (p.kind === "push" ? 46 : (p.kind === "rod" ? 22 : (p.kind === "wave" ? 28 : 20)));
+        if (planarDist(p.x, p.y, target.x, chestY) < hitR) {
+          if (target.phase > 0 || target.invuln > 0) {
+            /* ethereal: projectile passes through and is not a hit */
+          } else if (hurt(target, p.dmg, ownerProj.palette.glow)) {
+            if (p.kind === "push") {
+              var away = p.vx < 0 ? -1 : 1;
+              var shoved = clampSpot(target.x + away * 110, target.y);
+              target.x = shoved.x;
+              target.y = shoved.y;
+            }
+            if (p.kind === "fire") {
+              rings.push({ x: target.x, y: target.y, life: 0.25, max: 0.25, color: "#ff8a3a" });
+            }
+            hitAny = true;
+            break;
           }
-          if (p.kind === "fire") {
-            rings.push({ x: target.x, y: target.y, life: 0.25, max: 0.25, color: "#ff8a3a" });
-          }
-          projectiles.splice(i, 1);
-          continue;
         }
+      }
+      if (hitAny) {
+        projectiles.splice(i, 1);
+        continue;
       }
       if (p.life <= 0 || p.x < -60 || p.x > W + 60 || p.y < 80 || p.y > H + 40) projectiles.splice(i, 1);
     }
@@ -1989,21 +2255,27 @@
       sw.x += sw.vx * dt;
       sw.y += sw.vy * dt;
       if (!sw.hit) {
-        var foe = left;
+        var swordOwner = projectileOwner(sw.owner || "R");
+        var foes = livingEnemies(swordOwner);
+        var fi;
         var abx = sw.x - px0;
         var aby = sw.y - py0;
-        var apx = foe.x - px0;
-        var apy = (foe.y - 74) - py0;
-        var ab2 = abx * abx + aby * aby;
-        var tt = ab2 > 0.0001 ? (apx * abx + apy * aby) / ab2 : 0;
-        if (tt < 0) tt = 0;
-        if (tt > 1) tt = 1;
-        if (planarDist(foe.x, foe.y - 74, px0 + abx * tt, py0 + aby * tt) < 48) {
-          if (foe.phase > 0 || foe.invuln > 0) {
-            /* phased: the sword passes through and is not a hit */
-          } else {
-            hurt(foe, 23, "#ffe56a");
-            sw.hit = true;
+        for (fi = 0; fi < foes.length; fi++) {
+          var foe = foes[fi];
+          var apx = foe.x - px0;
+          var apy = (foe.y - 74) - py0;
+          var ab2 = abx * abx + aby * aby;
+          var tt = ab2 > 0.0001 ? (apx * abx + apy * aby) / ab2 : 0;
+          if (tt < 0) tt = 0;
+          if (tt > 1) tt = 1;
+          if (planarDist(foe.x, foe.y - 74, px0 + abx * tt, py0 + aby * tt) < 48) {
+            if (foe.phase > 0 || foe.invuln > 0) {
+              /* phased: the sword passes through and is not a hit */
+            } else {
+              hurt(foe, 23, "#ffe56a");
+              sw.hit = true;
+              break;
+            }
           }
         }
       }
@@ -2015,9 +2287,14 @@
       s.t += dt;
       if (!s.done && s.t >= s.delay) {
         s.done = true;
-        var victim = s.owner === "L" ? right : left;
-        if (planarDist(victim.x, victim.y, s.x, s.y) <= s.radius + 10) {
-          if (victim.phase <= 0 && victim.invuln <= 0) hurt(victim, s.dmg, s.glow);
+        var spikeOwner = projectileOwner(s.owner);
+        var spikeVictims = livingEnemies(spikeOwner);
+        var svi;
+        for (svi = 0; svi < spikeVictims.length; svi++) {
+          var victim = spikeVictims[svi];
+          if (planarDist(victim.x, victim.y, s.x, s.y) <= s.radius + 10) {
+            if (victim.phase <= 0 && victim.invuln <= 0) hurt(victim, s.dmg, s.glow);
+          }
         }
       }
       if (s.t > s.delay + 0.42) spikes.splice(i, 1);
@@ -3665,8 +3942,8 @@
     ctx.fillStyle = "rgba(210,230,240,0.9)";
     var lines = [
       "三局两胜对决。带土擅长虚化与空间，橙发掌控黑棒与气盾。",
-      "开局可选双人对战，或单人挑战人机。",
-      "移动：带土 WASD / 橙发 方向键（或摇杆），技能点按图标或快捷键。",
+      "开局可选单人人机、双人对战，或联机并肩打两名人机。",
+      "移动：P1 WASD / P2 方向键（或摇杆），技能点按图标或快捷键。",
       "受击会产生僵直，伤害越高停顿越久。"
     ];
     var i;
@@ -3683,24 +3960,32 @@
   }
 
   function drawModeScreen() {
-    panelBox(W / 2 - 300, 150, 600, 360);
+    panelBox(W / 2 - 340, 120, 680, 420);
     ctx.textAlign = "center";
     ctx.font = "bold 36px sans-serif";
     ctx.fillStyle = "#f4fbff";
-    ctx.fillText("选择对战模式", W / 2, 220);
-    ctx.font = "16px sans-serif";
+    ctx.fillText("选择对战模式", W / 2, 190);
+    ctx.font = "15px sans-serif";
     ctx.fillStyle = "rgba(200,220,230,0.8)";
-    ctx.fillText("单人 / 双人都需选角；双人左右各选一名（不可相同）", W / 2, 258);
-    flowButton(W / 2 - 220, 300, 200, 74, "单人 · 人机", true, function () {
+    ctx.fillText("单人挑战人机；双人对打；联机两人并肩对战两名人机", W / 2, 228);
+    flowButton(W / 2 - 300, 270, 180, 70, "单人 · 人机", true, function () {
       gameMode = "ai";
       goCharSelect();
     });
-    flowButton(W / 2 + 20, 300, 200, 74, "双人", true, function () {
+    flowButton(W / 2 - 90, 270, 180, 70, "双人", true, function () {
       gameMode = "vs";
       playerSide = "L";
       goCharSelect();
     });
-    flowButton(W / 2 - 90, 420, 180, 44, "返回介绍", false, function () { goIntro(); });
+    flowButton(W / 2 + 120, 270, 180, 70, "联机模式", true, function () {
+      gameMode = "coop";
+      playerSide = "L";
+      goCharSelect();
+    });
+    ctx.font = "13px sans-serif";
+    ctx.fillStyle = "rgba(180,210,220,0.75)";
+    ctx.fillText("联机：P1 WASD + QERF… / P2 方向键 + UIO PJK… 并肩打两名随机人机", W / 2, 370);
+    flowButton(W / 2 - 90, 400, 180, 44, "返回介绍", false, function () { goIntro(); });
   }
 
   function rosterById(id) {
@@ -3955,12 +4240,17 @@
     ctx.textAlign = "center";
     ctx.font = "bold 28px sans-serif";
     ctx.fillStyle = "#f4fbff";
-    ctx.fillText("双人选角", W / 2, 62);
+    ctx.fillText(gameMode === "coop" ? "联机选角 · 2v2" : "双人选角", W / 2, 62);
     ctx.font = "13px sans-serif";
     ctx.fillStyle = "rgba(200,220,230,0.85)";
     var stepHint = !selectedL
       ? "点击角色卡 → 自动填入左侧 P1"
       : (!selectedR ? "再点另一名角色 → 自动填入右侧 P2" : "两边已选；点左右框可改侧，再点卡可更换");
+    if (gameMode === "coop") {
+      stepHint = !selectedL
+        ? "联机：点角色卡 → P1（WASD）"
+        : (!selectedR ? "再点另一名 → P2（方向键）；对手为两名随机人机" : "已选两人；开始后并肩打两名人机");
+    }
     ctx.fillText(stepHint, W / 2, 84);
 
     var slotW = 190;
@@ -4014,7 +4304,7 @@
     ctx.fillText(tip, W / 2, H - 78);
 
     flowButton(40, H - 58, 120, 38, "返回", false, function () { goMode(); });
-    flowButton(W / 2 - 100, H - 64, 200, 46, "开始对战", can, function () {
+    flowButton(W / 2 - 100, H - 64, 200, 46, gameMode === "coop" ? "开始联机" : "开始对战", can, function () {
       if (!vsCanConfirm() || !vsScrollReady()) return;
       beginMatch();
     });
@@ -4069,7 +4359,7 @@
   }
 
   function drawCharSelectScreen() {
-    if (gameMode === "vs") drawVsCharSelectScreen();
+    if (gameMode === "vs" || gameMode === "coop") drawVsCharSelectScreen();
     else drawSoloCharSelectScreen();
   }
 
@@ -4094,22 +4384,46 @@
 
     drawTimer();
     if (!hudHidden) {
-      ctx.textAlign = "left";
-      ctx.font = "bold 16px sans-serif";
-      ctx.fillStyle = "#f4efe6";
-      ctx.fillText(left.name + (gameMode === "ai" && playerSide === "L" ? " · 你" : (gameMode === "ai" ? " · AI" : "")), 16, 18);
-      drawResourceBars(16, 26, 230, left, false);
-      drawPortrait(278, 42, left);
       var i;
-      for (i = 0; i < leftOrder.length; i++) drawSkillOrb(30 + i * 56, 108, left, leftOrder[i]);
+      if (isCoop()) {
+        ctx.textAlign = "left";
+        ctx.font = "bold 14px sans-serif";
+        ctx.fillStyle = "#f4efe6";
+        ctx.fillText("P1 · " + left.name, 16, 16);
+        drawResourceBars(16, 22, 200, left, false);
+        drawPortrait(236, 38, left);
+        ctx.fillText("P2 · " + left2.name, 16, 92);
+        drawResourceBars(16, 98, 200, left2, false);
+        drawPortrait(236, 114, left2);
+        for (i = 0; i < leftOrder.length; i++) drawSkillOrb(30 + i * 50, 160, left, leftOrder[i]);
+        for (i = 0; i < left2Order.length; i++) drawSkillOrb(30 + i * 50, 214, left2, left2Order[i]);
 
-      drawPortrait(W - 278, 42, right);
-      ctx.textAlign = "right";
-      ctx.font = "bold 16px sans-serif";
-      ctx.fillStyle = "#f4efe6";
-      ctx.fillText((gameMode === "ai" && playerSide === "R" ? "你 · " : (gameMode === "ai" ? "AI · " : "")) + right.name, W - 16, 18);
-      drawResourceBars(W - 16, 26, 230, right, true);
-      for (i = 0; i < rightOrder.length; i++) drawSkillOrb(W - 30 - (rightOrder.length - 1 - i) * 56, 108, right, rightOrder[i]);
+        ctx.textAlign = "right";
+        ctx.font = "bold 14px sans-serif";
+        ctx.fillStyle = "#f4efe6";
+        ctx.fillText("AI · " + right.name, W - 16, 16);
+        drawResourceBars(W - 16, 22, 200, right, true);
+        drawPortrait(W - 236, 38, right);
+        ctx.fillText("AI · " + right2.name, W - 16, 92);
+        drawResourceBars(W - 16, 98, 200, right2, true);
+        drawPortrait(W - 236, 114, right2);
+      } else {
+        ctx.textAlign = "left";
+        ctx.font = "bold 16px sans-serif";
+        ctx.fillStyle = "#f4efe6";
+        ctx.fillText(left.name + (gameMode === "ai" && playerSide === "L" ? " · 你" : (gameMode === "ai" ? " · AI" : "")), 16, 18);
+        drawResourceBars(16, 26, 230, left, false);
+        drawPortrait(278, 42, left);
+        for (i = 0; i < leftOrder.length; i++) drawSkillOrb(30 + i * 56, 108, left, leftOrder[i]);
+
+        drawPortrait(W - 278, 42, right);
+        ctx.textAlign = "right";
+        ctx.font = "bold 16px sans-serif";
+        ctx.fillStyle = "#f4efe6";
+        ctx.fillText((gameMode === "ai" && playerSide === "R" ? "你 · " : (gameMode === "ai" ? "AI · " : "")) + right.name, W - 16, 18);
+        drawResourceBars(W - 16, 26, 230, right, true);
+        for (i = 0; i < rightOrder.length; i++) drawSkillOrb(W - 30 - (rightOrder.length - 1 - i) * 56, 108, right, rightOrder[i]);
+      }
 
       drawPauseButton(34, H - 36);
       var speeds = [1, 2, 4, 8];
@@ -4153,16 +4467,20 @@
     }
     if (matchState === "roundEnd") {
       var rw = matchResult === "L" ? left : (matchResult === "R" ? right : null);
+      var roundTitle = null;
+      if (!rw) roundTitle = "本回平局";
+      else if (isCoop()) roundTitle = (matchResult === "L" ? "联机队" : "人机队") + " 赢下本回";
+      else roundTitle = rw.name + " 赢下本回";
       ctx.fillStyle = "rgba(0,0,0,0.45)";
       ctx.fillRect(W / 2 - 220, H / 2 - 78, 440, 130);
       ctx.textAlign = "center";
       ctx.font = "bold 42px sans-serif";
       if (!rw) {
         ctx.fillStyle = "#e8eef2";
-        ctx.fillText("本回平局", W / 2, H / 2 - 12);
+        ctx.fillText(roundTitle, W / 2, H / 2 - 12);
       } else {
         ctx.fillStyle = rw.palette.glow;
-        ctx.fillText(rw.name + " 赢下本回", W / 2, H / 2 - 12);
+        ctx.fillText(roundTitle, W / 2, H / 2 - 12);
       }
       ctx.font = "18px sans-serif";
       ctx.fillStyle = "#e8eef2";
@@ -4170,15 +4488,19 @@
     }
     if (matchState === "result") {
       var winner = matchResult === "L" ? left : (matchResult === "R" ? right : null);
+      var winTitle = null;
+      if (!winner) winTitle = "平局";
+      else if (isCoop()) winTitle = (matchResult === "L" ? "联机队" : "人机队") + " 获胜";
+      else winTitle = winner.name + " 获胜";
       panelBox(W / 2 - 260, H / 2 - 140, 520, 280);
       ctx.textAlign = "center";
       ctx.font = "bold 48px sans-serif";
       if (!winner) {
         ctx.fillStyle = "#e8eef2";
-        ctx.fillText("平局", W / 2, H / 2 - 60);
+        ctx.fillText(winTitle, W / 2, H / 2 - 60);
       } else {
         ctx.fillStyle = winner.palette.glow;
-        ctx.fillText(winner.name + " 获胜", W / 2, H / 2 - 60);
+        ctx.fillText(winTitle, W / 2, H / 2 - 60);
       }
       ctx.font = "18px sans-serif";
       ctx.fillStyle = "#e8eef2";
@@ -4210,11 +4532,12 @@
     drawSpikes();
     drawRings();
     drawWheels();
-    var batch = [
-      { y: left.y, kind: "f", who: left },
-      { y: right.y, kind: "f", who: right }
-    ];
+    var batch = [];
     var gi;
+    var fightersDraw = activeFighters();
+    for (gi = 0; gi < fightersDraw.length; gi++) {
+      batch.push({ y: fightersDraw[gi].y, kind: "f", who: fightersDraw[gi] });
+    }
     for (gi = 0; gi < ghosts.length; gi++) batch.push({ y: ghosts[gi].y, kind: "g", who: ghosts[gi] });
     for (gi = 0; gi < projectiles.length; gi++) batch.push({ y: projectiles[gi].y + 70, kind: "p", who: projectiles[gi] });
     for (gi = 0; gi < swords.length; gi++) batch.push({ y: swords[gi].y, kind: "b", who: swords[gi] });
@@ -4226,10 +4549,10 @@
       else drawOneProjectile(batch[gi].who);
     }
     drawBursts();
-    if (left.shield > 0 && !left.repulseOn) drawAirShield(left);
-    if (right.shield > 0 && !right.repulseOn) drawAirShield(right);
-    drawPullStreams(left);
-    drawPullStreams(right);
+    for (gi = 0; gi < fightersDraw.length; gi++) {
+      if (fightersDraw[gi].shield > 0 && !fightersDraw[gi].repulseOn) drawAirShield(fightersDraw[gi]);
+      drawPullStreams(fightersDraw[gi]);
+    }
     drawSparks();
     drawFloaters();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -4365,8 +4688,8 @@
       return;
     }
     keysDown[k] = true;
-    var caster = mapped[0] === "L" ? left : right;
-    if (!humanControls(caster)) return;
+    var caster = fighterByOwner(mapped[0]);
+    if (!caster || !humanControls(caster)) return;
     if (mapped[1] === "spike") shieldPressDown(caster);
     else tryCast(caster, mapped[1]);
   });
@@ -4387,7 +4710,10 @@
     var k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     if (mappedSkillRelease(k) === "spike") {
       var rel = controlMap[k];
-      if (rel) shieldPressUp(rel[0] === "L" ? left : right);
+      if (rel) {
+        var relF = fighterByOwner(rel[0]);
+        if (relF) shieldPressUp(relF);
+      }
     }
     keysDown[k] = false;
   });
@@ -4395,6 +4721,8 @@
   window.addEventListener("blur", function () {
     shieldPressUp(left);
     shieldPressUp(right);
+    shieldPressUp(left2);
+    shieldPressUp(right2);
     var key;
     for (key in keysDown) keysDown[key] = false;
     releaseStick(sticks[0].pid);
@@ -4528,9 +4856,17 @@
         return;
       }
     }
-    var swordF = fighterByKit("pain");
-    if (!swordF || paused || matchState !== "fight" || koId || swordF.armor <= 0) return;
-    if (gameMode === "ai" && swordF.id !== playerSide) return;
+    var swordCandidates = activeFighters();
+    var swordF = null;
+    var si;
+    for (si = 0; si < swordCandidates.length; si++) {
+      var cand = swordCandidates[si];
+      if (cand.kit === "pain" && cand.hp > 0 && humanControls(cand) && cand.armor > 0) {
+        swordF = cand;
+        break;
+      }
+    }
+    if (!swordF || paused || matchState !== "fight" || koId) return;
     var mx = pt.x;
     var my = pt.y;
     var x0 = swordF.x;
@@ -4545,7 +4881,8 @@
       vx: dx / len * speed,
       vy: dy / len * speed,
       life: 1.15,
-      hit: false
+      hit: false,
+      owner: swordF.id
     });
   });
 
@@ -4567,6 +4904,32 @@
       }
     }
   }, { passive: false });
+
+  window.__DUEL_DEBUG__ = function () {
+    return {
+      matchState: matchState,
+      gameMode: gameMode,
+      selectedL: selectedL,
+      selectedR: selectedR,
+      selectedScrollL: selectedScrollL,
+      selectedScrollR: selectedScrollR,
+      fighters: activeFighters().map(function (f) {
+        return { id: f.id, name: f.name, kit: f.kit, hp: f.hp, x: f.x, y: f.y, team: teamOf(f) };
+      }),
+      roundWinsL: roundWinsL,
+      roundWinsR: roundWinsR,
+      koId: koId,
+      assetV: ASSET_V
+    };
+  };
+  window.__DUEL_FORCE_COOP__ = function () {
+    gameMode = "coop";
+    selectedL = "obito";
+    selectedR = "pain";
+    selectedScrollL = SCROLL_DEFS[0].id;
+    selectedScrollR = SCROLL_DEFS[1].id;
+    beginMatch();
+  };
 
   reset();
   syncFlowHint();
