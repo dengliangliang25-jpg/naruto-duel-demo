@@ -50,7 +50,7 @@
   var matchTime = 60;
   var matchResult = null;
   var gameMode = "ai"; // ai | vs | coop | practice
-  var practiceDummy = true; // passive dummy vs light AI
+  var practiceDummy = false; // pages25: 木桩呆立 is an explicit switch, default OFF (opponent moves + attacks)
   var practiceNoCdAll = false;
   var practiceNoCd = {}; // skillId -> bool
   var practicePanel = false;
@@ -67,7 +67,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
-  var ASSET_V = "pages24";
+  var ASSET_V = "pages25";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 8;
@@ -84,7 +84,7 @@
 
   // pages24: mirror hosts. Each file is pinned to one host (round-robin) so the browser
   // opens several independent connections; a retry moves the file to the next host.
-  var ASSET_COMMIT = "948183d428e375d391b57faef2063837e7ac06fb";
+  var ASSET_COMMIT = "1909864639e7d796a4cd5dd9c9408570cbb6b700";
   var MIRRORS = [""].concat(ASSET_COMMIT.indexOf("__") === 0 ? [] : [
     "https://cdn.jsdelivr.net/gh/dengliangliang25-jpg/naruto-duel-demo@" + ASSET_COMMIT + "/",
     "https://gcore.jsdelivr.net/gh/dengliangliang25-jpg/naruto-duel-demo@" + ASSET_COMMIT + "/",
@@ -471,6 +471,7 @@
   var hudHidden = false;
   var hudHits = [];
   var uiLatch = 0;
+  var lastUiHit = null;
   var screenChangeAt = 0;
   var flowHint = document.getElementById("flowHint");
   var charRoster = [
@@ -757,7 +758,7 @@
     phase: { key: "E", name: "虚化", role: "灵体", cd: 0, max: 7.8, cost: 30 },
     tele: { key: "R", name: "传送", role: "突进", cd: 0, max: 1.495, cost: 16 },
     breath: { key: "F", name: "喷火", role: "远程", cd: 0, max: 2.21, cost: 22 },
-    space: { key: "C", name: "切空间", role: "空间", cd: 0, max: 0, cost: 0 }
+    space: { key: "C", name: "切空间", role: "空间", cd: 0, max: 1, cost: 0 }
   };
   right.skills = {
     thrust: { key: "U", name: "连击", role: "平A", cd: 0, max: 1.014, cost: 0 },
@@ -808,7 +809,7 @@
         phase: { key: "E", name: "虚化", role: "灵体", cd: 0, max: 7.8, cost: 30 },
         tele: { key: "R", name: "传送", role: "突进", cd: 0, max: 1.495, cost: 16 },
         breath: { key: "F", name: "喷火", role: "远程", cd: 0, max: 2.21, cost: 22 },
-        space: { key: "C", name: "切空间", role: "空间", cd: 0, max: 0, cost: 0 }
+        space: { key: "C", name: "切空间", role: "空间", cd: 0, max: 1, cost: 0 }
       }
     },
     pain: {
@@ -1623,9 +1624,19 @@
     fightClock.accum = 0;
     fightClock.stamp = 0;
   }
+  // pages25: the round clock only advances while the fight is actually on screen. Each frame
+  // adds real elapsed ms, capped at 250ms, so a hidden/background tab or a long hitch can no
+  // longer make the clock jump (that is how 60→37 showed up in ~11s of watched time).
+  function fightClockTick() {
+    if (!fightClock.stamp) return;
+    var now = performance.now();
+    var d = now - fightClock.stamp;
+    if (d > 0) fightClock.accum += Math.min(d, 250);
+    fightClock.stamp = now;
+  }
   function fightClockPause() {
     if (fightClock.stamp) {
-      fightClock.accum += performance.now() - fightClock.stamp;
+      fightClockTick();
       fightClock.stamp = 0;
     }
   }
@@ -1634,9 +1645,13 @@
   }
   function fightClockElapsed() {
     var t = fightClock.accum;
-    if (fightClock.stamp) t += performance.now() - fightClock.stamp;
+    if (fightClock.stamp) t += Math.min(250, Math.max(0, performance.now() - fightClock.stamp));
     return t / 1000;
   }
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) fightClockPause();
+    else if (matchState === "fight" && !paused) fightClockResume();
+  });
   function beginCountdown() {
     reset();
     matchState = "countdown";
@@ -1753,11 +1768,27 @@
 
   function tryCast(f, id) {
     if (!f || f.hp <= 0) return;
-    if (paused || matchState !== "fight" || koId || (f.stun || 0) > 0 || isAirborne(f)) return;
+    if (paused || matchState !== "fight" || koId) return;
     var sk = f.skills[id];
-    if (!sk || sk.cd > 0) return;
+    if (!sk) return;
+    // pages25: a second 切空间 press always leaves the void at once (even mid hit-stun / in the air)
+    if ((id === "space" || id === "dash") && voidSpace) {
+      if (performance.now() - (f.voidEnterAt || 0) < 250) return; // key bounce guard
+      castSpace(f);
+      sk.cd = sk.max || 1;
+      return;
+    }
+    if ((f.stun || 0) > 0 || isAirborne(f)) { bufferCast(f, id); return; }
+    if (sk.cd > 0) return;
     if ((id === "phase" || id === "needle") && f.phase > 0) return;
-    if (id === "ult2" && !(isTanjiro(f) && f.fireForm)) return;
+    if (id === "ult2" && !(isTanjiro(f) && f.fireForm)) {
+      // pages25: V is fire-form only; say so instead of silently ignoring the key
+      if (humanControls(f) && performance.now() - (f.needFireHintAt || 0) > 600) {
+        f.needFireHintAt = performance.now();
+        spawnFloater(f.x, f.y - 190, "需火之形态（先按" + ((f.skills.ult1 && f.skills.ult1.key) || "C") + "）", "#ffb070");
+      }
+      return;
+    }
     if (id === "ult1" && isTanjiro(f) && f.fireForm) return;
     var cost = sk.cost || 0;
     if (id === "ult1" && isTanjiro(f)) cost = Math.floor((f.chakra || 0) * 0.5);
@@ -1766,6 +1797,7 @@
     if (isObito(f) && f.phase > 0 && id !== "phase") endPhase(f);
     if (id === "space" || id === "dash") {
       castSpace(f);
+      f.voidEnterAt = performance.now();
       f.chakra -= cost;
       return;
     }
@@ -1779,7 +1811,10 @@
       applySkillCd(f, sk, id);
       return;
     }
-    if (f.busy > 0 || f.dashT > 0 || (f.counterT || 0) > 0 || (f.ult2Phase || 0) > 0) return;
+    if (f.busy > 0 || f.dashT > 0 || (f.counterT || 0) > 0 || (f.ult2Phase || 0) > 0) { bufferCast(f, id); return; }
+    f.castBuf = null;
+    // pages25: any new action ends a lingering 吸引 so its pose/fx cannot look like J fired again
+    if (f.pullOn || f.pullFx > 0) { f.pullOn = false; f.pullFx = 0; }
     f.chakra -= cost;
     applySkillCd(f, sk, id);
     if (id === "punch") beginMelee(f, "punch", 0.56, 0.24);
@@ -1801,6 +1836,22 @@
     else if (id.indexOf("scroll_") === 0) castScroll(f, id);
   }
 
+  // pages25: a press made while the fighter is still finishing a move is kept for 0.35s and
+  // fired the moment it can be (fixes "pressed Q / P right after another skill, nothing happened").
+  function bufferCast(f, id) {
+    if (!humanControls(f)) return;
+    f.castBuf = { id: id, until: performance.now() + 350 };
+  }
+  function pumpCastBuffer(f) {
+    var b = f.castBuf;
+    if (!b) return;
+    if (performance.now() > b.until) { f.castBuf = null; return; }
+    if (f.busy > 0 || f.dashT > 0 || (f.counterT || 0) > 0 || (f.ult2Phase || 0) > 0 || (f.stun || 0) > 0 || isAirborne(f)) return;
+    f.castBuf = null;
+    if (b.id === "spike") { castShield(f, 3); return; }
+    tryCast(f, b.id);
+  }
+
   function castTanjiroAtk(f) {
     var start = tanjiroStartup(f, 0.12);
     var dur = start + 0.38;
@@ -1808,6 +1859,14 @@
     beginMelee(f, "t_atk", dur, start + 0.08);
     f.meleeDmg = tanjiroDmg(f, 12);
     f.meleeRange = tanjiroBodyW * 1.35;
+    // pages25: visible sword arc (the 普攻 sheet frames are close to the idle pose)
+    f.atkSwing = (f.atkSwing || 0) + 1;
+    var up = f.atkSwing % 2 === 0;
+    spawnSlash(f.x + f.facing * tanjiroBodyW * 0.38, f.y - tanjiroBodyH * 0.5, f.facing, {
+      delay: start, life: 0.26, r: tanjiroBodyW * 0.62, width: 15,
+      a0: up ? 1.3 : -1.9, a1: up ? -1.4 : 1.0,
+      color: f.fireForm ? "#ffb060" : "#8ee8ff", glow: f.fireForm ? "#ff6a2a" : "#3ec8ff"
+    });
   }
   function castTanjiroWater2(f) {
     var start = tanjiroStartup(f, 0.15);
@@ -1913,6 +1972,30 @@
     defender.meleeRange = tanjiroBodyW * 1.6;
     defender.hyperArmor = Math.max(defender.hyperArmor || 0, 0.55);
     spawnFloater(defender.x, defender.y - 170, "反击", defender.palette.glow);
+    spawnSlash(defender.x + defender.facing * tanjiroBodyW * 0.4, defender.y - tanjiroBodyH * 0.5, defender.facing, {
+      delay: 0.16, life: 0.32, r: tanjiroBodyW * 0.75, width: 19, a0: -2.2, a1: 1.2,
+      color: defender.fireForm ? "#ffb060" : "#9af0ff", glow: defender.fireForm ? "#ff5a20" : "#30d0ff"
+    });
+  }
+  // pages25: 二型 stance that was never struck still ends with the 反击斩 swing (forward),
+  // so the counter animation is visible even against a passive dummy.
+  function tanjiroStanceFinisher(f) {
+    if (f.hp <= 0 || isAirborne(f) || (f.stun || 0) > 0 || (f.ult2Phase || 0) > 0) return;
+    plantCaster(f);
+    var foeS = other(f);
+    if (foeS && foeS.hp > 0) f.facing = foeS.x >= f.x ? 1 : -1;
+    f.anim = "t_counter";
+    f.animT = 0;
+    f.animDur = 0.5;
+    f.busy = 0.5;
+    f.hitPending = true;
+    f.hitAt = 0.2;
+    f.meleeDmg = tanjiroDmg(f, 12);
+    f.meleeRange = tanjiroBodyW * 1.5;
+    spawnSlash(f.x + f.facing * tanjiroBodyW * 0.4, f.y - tanjiroBodyH * 0.5, f.facing, {
+      delay: 0.14, life: 0.3, r: tanjiroBodyW * 0.72, width: 17, a0: -2.2, a1: 1.2,
+      color: f.fireForm ? "#ffb060" : "#9af0ff", glow: f.fireForm ? "#ff5a20" : "#30d0ff"
+    });
   }
 
   function castScroll(f, id) {
@@ -2164,6 +2247,7 @@
       kind: "rod",
       x: palm.x,
       y: palm.y,
+      sweepX: f.x, // first step sweeps from Pain's body so point-blank casts still connect
       vx: dir * 900,
       vy: 0,
       r: 5,
@@ -2206,7 +2290,9 @@
     if (paused || matchState !== "fight" || koId || (f.stun || 0) > 0 || isAirborne(f)) return false;
     var sk = f.skills.spike;
     if (!sk || sk.cd > 0 || f.shield > 0 || f.shieldWind > 0) return false;
-    if (f.busy > 0 || f.dashT > 0) return false;
+    if (f.busy > 0 || f.dashT > 0) { bufferCast(f, "spike"); return false; }
+    f.castBuf = null;
+    if (f.pullOn || f.pullFx > 0) { f.pullOn = false; f.pullFx = 0; }
     if ((f.chakra || 0) < (sk.cost || 0)) return false;
     f.chakra -= sk.cost || 0;
     f.shield = 0;
@@ -2234,8 +2320,8 @@
   function shieldPressUp(f) {
     if (!f.shieldKey) return;
     f.shieldKey = false;
-    var held = (performance.now() - (f.shieldKeyAt || performance.now())) / 1000;
-    var long = held >= 0.35;
+    // pages25: a tap now gets the full 20-frame 气盾 (~1.1s of dome) instead of the 12-frame short one
+    var long = true;
     f.repulseLong = long;
     var remain = repulseSpan(long) - (f.repulseT || 0);
     if (remain < 0.05) remain = 0.05;
@@ -2399,6 +2485,8 @@
   }
 
   function spawnKickBurst(f) {
+    // pages25: visible 重脚 sweep (crescent + dust) on top of the impact flash
+    spawnSlash(f.x + f.facing * 30, f.y - 60, f.facing, { life: 0.28, r: 84, width: 18, a0: 1.25, a1: -0.75, color: "#ffe2b0", glow: "#ff9a40" });
     bursts.push({
       kind: "impact",
       x: f.x + f.facing * 108,
@@ -2473,7 +2561,13 @@
       if (inFront && dist < 132) hurt(opp, 8, right.palette.glow);
     } else if (f.anim === "kick") {
       if (inFront && dist < 156) hurt(opp, 16, right.palette.glow);
-    } else if (f.anim === "t_atk" || f.anim === "t_water1" || f.anim === "t_counter") {
+    } else if (f.anim === "t_water1") {
+      // dash-through slash: hits anything within range or anything the blink passed over
+      var rng1 = f.meleeRange || (tanjiroBodyW * 1.5);
+      var x0w = f.water1From != null ? f.water1From : f.x;
+      var passed = opp.x >= Math.min(x0w, f.x) - 20 && opp.x <= Math.max(x0w, f.x) + 20 && Math.abs(dy) < 90;
+      if (dist < rng1 || passed) hurt(opp, f.meleeDmg || 20, f.palette.glow, { attacker: f });
+    } else if (f.anim === "t_atk" || f.anim === "t_counter") {
       var rng = f.meleeRange || (tanjiroBodyW * 1.4);
       if (inFront && dist < rng) hurt(opp, f.meleeDmg || 12, f.palette.glow, { attacker: f });
     }
@@ -2669,7 +2763,21 @@
     updateOneAI(aiFighter(), dt);
   }
 
+  // pages25: hard keep-in-view pass after every simulation step. Knockback / launches / pulls
+  // used to move fighters directly and could push one past the left edge (lost round 1 at ~16s).
   function update(dt) {
+    updateCore(dt);
+    var fs = activeFighters(), i;
+    for (i = 0; i < fs.length; i++) {
+      var f = fs[i];
+      if (!f) continue;
+      if (f.x < 70) { f.x = 70; if (f.hitPushVx < 0) f.hitPushVx = 0; if (f.launchVx < 0) f.launchVx = 0; if (f.dashVx < 0) f.dashVx = 0; }
+      if (f.x > W - 70) { f.x = W - 70; if (f.hitPushVx > 0) f.hitPushVx = 0; if (f.launchVx > 0) f.launchVx = 0; if (f.dashVx > 0) f.dashVx = 0; }
+      if (f.y < 430) f.y = 430;
+      if (f.y > 690) f.y = 690;
+    }
+  }
+  function updateCore(dt) {
     // pages23: 切空间 uses wall-clock so simSpeed / low FPS cannot stretch it past 4s.
     if (voidSpace) {
       var leftMs = voidUntil - performance.now();
@@ -2717,6 +2825,7 @@
         f.barrierT = Math.max(0, f.barrierT - dt);
         if (f.barrierT <= 0 && !f.barrierUsed) {
           f.barrierUsed = true;
+          if (f.busy <= 0 && f.dashT <= 0) tanjiroStanceFinisher(f);
         }
       }
       if (isTanjiro(f) && (f.counterT || 0) > 0) {
@@ -2814,6 +2923,7 @@
       if (f.hurt > 0) f.hurt = Math.max(0, f.hurt - dt);
       if (f.stun > 0) f.stun = Math.max(0, f.stun - dt);
       if (f.busy > 0) f.busy = Math.max(0, f.busy - dt);
+      if (f.castBuf) pumpCastBuffer(f);
       if (f.hitShake > 0) f.hitShake = Math.max(0, f.hitShake - dt);
       if (f.barDmgT > 0) f.barDmgT = Math.max(0, f.barDmgT - dt);
       if (f.hpChip == null) f.hpChip = f.hp;
@@ -2957,10 +3067,18 @@
           f.water1Blink = true;
           var spot1 = clampSpot(f.x + f.facing * tanjiroBodyW, f.y);
           ghosts.push({ x: f.x, y: f.y, facing: f.facing, life: 0.25, max: 0.25, palette: f.palette, weapon: f.weapon, owner: f.id, kit: f.kit });
+          var fromX1 = f.x, dir1 = f.facing;
           f.x = spot1.x;
           f.y = spot1.y;
-          f.facing = -f.facing;
+          f.water1From = fromX1;
+          // pages25: the slash passes through; turn to face the foe (doc: flip 180° after passing)
+          var foe1 = other(f);
+          f.facing = (foe1 && foe1.hp > 0) ? (foe1.x >= f.x ? 1 : -1) : -f.facing;
           plantCaster(f);
+          spawnSlash((fromX1 + f.x) / 2, f.y - tanjiroBodyH * 0.48, dir1, {
+            life: 0.34, r: Math.abs(f.x - fromX1) * 0.5 + tanjiroBodyW * 0.55, width: 20, squash: 0.32,
+            a0: -2.6, a1: 0.5, color: f.fireForm ? "#ffb060" : "#7fe0ff", glow: f.fireForm ? "#ff5a20" : "#2ab8ff"
+          });
         }
         if (f.anim === "t_ult1" && f.pendingFireForm && f.animT >= 0.4) {
           enterFireForm(f);
@@ -3048,6 +3166,10 @@
         if (p.life <= 0) projectiles.splice(i, 1);
         continue;
       }
+      // pages25: remember where this step started so fast shots are tested as a swept segment
+      // (900px/s at 20fps moves ~45px per step, more than the old 22px hit radius).
+      var px0 = (p.sweepX != null) ? p.sweepX : p.x;
+      p.sweepX = null;
       p.x += p.vx * dt;
       p.y += p.vy * dt;
       if (p.kind === "fire") {
@@ -3065,7 +3187,14 @@
         var target = enemiesHit[ei];
         var chestY = target.y - (p.kind === "fire" ? 78 : 74);
         var hitR = p.kind === "fire" ? 28 * (p.scale || 0.28) : (p.kind === "push" ? 46 : (p.kind === "rod" ? 22 : (p.kind === "wave" ? 28 : 20)));
-        if (planarDist(p.x, p.y, target.x, chestY) < hitR) {
+        var sweptHit = false;
+        if (p.kind === "rod" || p.kind === "wave" || p.kind === "push") {
+          // body box of the target: half width ~30, from feet up to ~head height
+          var bodyTop = target.y - 175, bodyBot = target.y - 10;
+          var segL = Math.min(px0, p.x) - (p.kind === "push" ? 30 : 8), segR = Math.max(px0, p.x) + (p.kind === "push" ? 30 : 8);
+          sweptHit = target.x + 30 >= segL && target.x - 30 <= segR && p.y >= bodyTop && p.y <= bodyBot;
+        }
+        if (sweptHit || planarDist(p.x, p.y, target.x, chestY) < hitR) {
           if (target.phase > 0 || target.invuln > 0) {
             /* ethereal: projectile passes through and is not a hit */
           } else if (hurt(target, p.dmg, ownerProj.palette.glow, { attacker: ownerProj })) {
@@ -3156,6 +3285,7 @@
       if (wheels[i].life <= 0) wheels.splice(i, 1);
     }
     for (i = bursts.length - 1; i >= 0; i--) {
+      if (bursts[i].delay > 0) { bursts[i].delay -= dt; continue; }
       bursts[i].life -= dt;
       if (bursts[i].life <= 0) bursts.splice(i, 1);
     }
@@ -3976,6 +4106,10 @@
       var u7 = f.animDur > 0 ? f.animT / f.animDur : 1;
       if (u7 < 0) u7 = 0; if (u7 > 0.999) u7 = 0.999;
       idx = Math.min(5, Math.floor(u7 * 6));
+    } else if ((f.barrierT || 0) > 0 && !f.barrierUsed && f.gait !== "run" && f.gait !== "walk") {
+      // pages25: hold the 二型 guard pose for the whole stance instead of dropping to idle
+      set = form.water2;
+      idx = 3 + (Math.floor(time * 6) % 2);
     } else if (f.gait === "run" || f.gait === "walk") {
       set = tanjiro.idle;
       idx = Math.floor(time * 10) % 8;
@@ -3984,19 +4118,55 @@
       idx = Math.floor(time * 8) % 8;
     }
     if (f.invuln > 0 && !isDowned(f) && !isAirborne(f) && Math.sin(time * 40) > 0) alpha *= 0.45;
-    if (f.fireForm) {
-      // soft fire tint aura under sprite
-      ctx.save();
-      ctx.globalAlpha = 0.18;
-      ctx.fillStyle = "#ff6a3a";
-      ctx.beginPath();
-      ctx.ellipse(f.x, f.y - tanjiroBodyH * 0.45, 36, 58, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
+    // pages25: small forward lunge on sword swings so the strike reads even with subtle frames
+    var lungeX = 0, swingTilt = 0;
+    if (!reacting && (f.anim === "t_atk" || f.anim === "t_counter" || f.anim === "t_water1")) {
+      var lu = f.animDur > 0 ? Math.min(1, f.animT / f.animDur) : 1;
+      lungeX = f.facing * Math.sin(Math.PI * lu) * tanjiroBodyW * 0.16;
+      swingTilt = f.facing * Math.sin(Math.PI * lu) * 0.06;
     }
+    if (f.fireForm) drawTanjiroFireAura(f, true);
     var drawAir = (f.airH || 0);
     if (f.busy > 0 || (f.ult2Phase || 0) > 0 || (f.counterT || 0) > 0 || (f.anim && f.anim.indexOf("t_") === 0)) drawAir = 0;
-    drawTanjiroAt(f.x, f.y - drawAir, f.facing, set, idx, alpha, fighterDrawTilt(f), f.hitShake || 0);
+    drawTanjiroAt(f.x + lungeX, f.y - drawAir, f.facing, set, idx, alpha, fighterDrawTilt(f) + swingTilt, f.hitShake || 0);
+    if (f.fireForm) drawTanjiroFireAura(f, false);
+  }
+  // pages25: 火之形态 needs to read at a glance: glow + flickering flame tongues + embers.
+  function drawTanjiroFireAura(f, behind) {
+    var cx = f.x, top = f.y - tanjiroBodyH * 1.02, h = tanjiroBodyH;
+    var w = tanjiroBodyW * 0.62;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    if (behind) {
+      var g = ctx.createRadialGradient(cx, f.y - h * 0.48, 8, cx, f.y - h * 0.48, h * 0.75);
+      g.addColorStop(0, "rgba(255,140,40,0.42)");
+      g.addColorStop(0.55, "rgba(255,70,20,0.20)");
+      g.addColorStop(1, "rgba(255,40,0,0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.ellipse(cx, f.y - h * 0.48, w * 1.25, h * 0.72, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    var n = behind ? 9 : 5, i;
+    for (i = 0; i < n; i++) {
+      var ph = (time * (2.2 + (i % 3) * 0.5) + i * 0.37) % 1;
+      var fxp = cx + (((i * 0.618) % 1) - 0.5) * w * (behind ? 2.0 : 1.4);
+      var fy = f.y - h * 0.08 - ph * h * (behind ? 1.0 : 0.75);
+      var fs = (1 - ph) * (behind ? 22 : 13) + 4;
+      ctx.globalAlpha = (1 - ph) * (behind ? 0.75 : 0.55);
+      var fg = ctx.createRadialGradient(fxp, fy, 1, fxp, fy, fs);
+      fg.addColorStop(0, "rgba(255,240,180,1)");
+      fg.addColorStop(0.4, "rgba(255,150,40,0.9)");
+      fg.addColorStop(1, "rgba(255,60,0,0)");
+      ctx.fillStyle = fg;
+      ctx.beginPath();
+      ctx.moveTo(fxp - fs * 0.6, fy + fs * 0.4);
+      ctx.quadraticCurveTo(fxp - fs * 0.5, fy - fs * 0.6, fxp + Math.sin(time * 9 + i) * fs * 0.3, fy - fs * 1.6);
+      ctx.quadraticCurveTo(fxp + fs * 0.5, fy - fs * 0.6, fxp + fs * 0.6, fy + fs * 0.4);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
   }
 
   function drawFighter(f) {
@@ -4279,12 +4449,60 @@
     }
   }
 
+  // pages25: crescent sword-trail used by Tanjiro's Q / F / E counter (no dedicated fx sheet).
+  function drawSlashArc(b, u) {
+    var sweep = Math.min(1, u * 2.4);
+    var fade = u < 0.45 ? 1 : Math.max(0, 1 - (u - 0.45) / 0.55);
+    var r = b.r || 90;
+    var a0 = b.a0 != null ? b.a0 : -1.9, a1 = b.a1 != null ? b.a1 : 0.9;
+    var aEnd = a0 + (a1 - a0) * sweep;
+    var aStart = a1 >= a0 ? Math.max(a0, aEnd - (a1 - a0) * 0.75) : Math.min(a0, aEnd - (a1 - a0) * 0.75);
+    var ccw = a1 < a0;
+    ctx.scale(b.facing < 0 ? -1 : 1, b.squash || 1);
+    var steps = 14, k;
+    ctx.lineCap = "round";
+    for (k = 0; k < steps; k++) {
+      var t0 = aStart + (aEnd - aStart) * (k / steps);
+      var t1 = aStart + (aEnd - aStart) * ((k + 1) / steps);
+      var w = (b.width || 16) * (0.25 + 0.75 * (k / steps));
+      ctx.globalAlpha = fade * (0.25 + 0.75 * (k / steps));
+      ctx.strokeStyle = b.color || "#8ee8ff";
+      ctx.shadowColor = b.glow || b.color || "#8ee8ff";
+      ctx.shadowBlur = 18;
+      ctx.lineWidth = w;
+      ctx.beginPath();
+      ctx.arc(0, 0, r, t0, t1, ccw);
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = "rgba(255,255,255,0.9)";
+      ctx.lineWidth = w * 0.32;
+      ctx.beginPath();
+      ctx.arc(0, 0, r, t0, t1, ccw);
+      ctx.stroke();
+    }
+  }
+  function spawnSlash(x, y, facing, opts) {
+    var b = { kind: "slash", x: x, y: y, facing: facing || 1, life: 0.3, max: 0.3, r: 90, width: 16, color: "#8ee8ff", delay: 0 };
+    var k;
+    for (k in (opts || {})) b[k] = opts[k];
+    b.max = b.life;
+    bursts.push(b);
+    return b;
+  }
+
   function drawBursts() {
     var i;
     for (i = 0; i < bursts.length; i++) {
       var b = bursts[i];
+      if (b.delay > 0) continue;
       var u = 1 - b.life / b.max;
       ctx.save();
+      if (b.kind === "slash") {
+        ctx.translate(b.x, b.y);
+        drawSlashArc(b, u);
+        ctx.restore();
+        continue;
+      }
       ctx.translate(b.x, b.y);
       if (b.kind === "flash") {
         ctx.scale(b.facing < 0 ? -1 : 1, 1);
@@ -4725,8 +4943,8 @@
     ctx.restore();
   }
 
-  function addHit(x, y, w, h, fn) {
-    hudHits.push({ x: x, y: y, w: w, h: h, fn: fn });
+  function addHit(x, y, w, h, fn, tag) {
+    hudHits.push({ x: x, y: y, w: w, h: h, fn: fn, tag: tag || "" });
   }
 
   function drawPortrait(cx, cy, f) {
@@ -4884,7 +5102,8 @@
   function drawSkillOrb(cx, cy, f, id) {
     var sk = f.skills[id];
     var r = 26;
-    var ready = !paused && matchState === "fight" && sk.cd <= 0 && !(id === "spike" && (f.shield > 0 || f.shieldWind > 0)) && (f.chakra || 0) >= (sk.cost || 0);
+    var needFire = id === "ult2" && isTanjiro(f) && !f.fireForm;
+    var ready = !paused && matchState === "fight" && sk.cd <= 0 && !needFire && !(id === "spike" && (f.shield > 0 || f.shieldWind > 0)) && (f.chakra || 0) >= (sk.cost || 0);
     ctx.save();
     ctx.beginPath();
     ctx.arc(cx, cy, r + 3, 0, Math.PI * 2);
@@ -4937,12 +5156,35 @@
       ctx.fillStyle = "#fff";
       ctx.fillText(sk.cd.toFixed(1), cx, cy + 4);
     }
+    if (needFire) {
+      // pages25: greyed V with an explicit reason
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(0,0,0,0.55)";
+      ctx.fill();
+      ctx.font = "bold 10px sans-serif";
+      ctx.fillStyle = "#ffb070";
+      ctx.fillText("需火之", cx, cy - 2);
+      ctx.fillText("形态", cx, cy + 10);
+    }
+    if ((id === "space" || id === "dash") && voidSpace) {
+      // pages25: 切空间 shows its remaining time on the icon; press again to leave early
+      var vLeft = Math.max(0, (voidUntil - performance.now()) / 1000);
+      ctx.beginPath();
+      ctx.arc(cx, cy, r + 1, -Math.PI / 2, -Math.PI / 2 + (vLeft / VOID_DUR) * Math.PI * 2);
+      ctx.strokeStyle = "#c9a6ff";
+      ctx.lineWidth = 4;
+      ctx.stroke();
+      ctx.font = "bold 13px sans-serif";
+      ctx.fillStyle = "#fff";
+      ctx.fillText(vLeft.toFixed(1), cx, cy + 4);
+    }
     ctx.restore();
     addHit(cx - r, cy - r, r * 2, r * 2, function () {
       if (!humanControls(f)) return;
       if (id === "spike") shieldPressDown(f);
       else tryCast(f, id);
-    });
+    }, "skill:" + f.id + ":" + id);
   }
 
   function drawPauseButton(cx, cy) {
@@ -5035,7 +5277,7 @@
         practiceNoCd = {};
       }
     });
-    flowButton(bx + 208, by + 12, 104, 28, practiceDummy ? "木桩呆立" : "人机进攻", false, function () {
+    flowButton(bx + 208, by + 12, 104, 28, practiceDummy ? "木桩呆立：开" : "木桩呆立：关", practiceDummy, function () {
       practiceDummy = !practiceDummy;
     });
     flowButton(bx + pw - 220, by + 12, 100, 28, "重选角色", false, function () {
@@ -5106,7 +5348,7 @@
     ctx.fillText(label, x + w / 2, y + h / 2 + 1);
     ctx.textBaseline = "alphabetic";
     ctx.restore();
-    addHit(x, y, w, h, fn);
+    addHit(x, y, w, h, fn, "btn:" + label);
   }
 
   function drawIntroScreen() {
@@ -5411,7 +5653,7 @@
             }
           }
         };
-      })(def.id));
+      })(def.id), "scroll:" + def.id);
     }
   }
 
@@ -5485,7 +5727,7 @@
       if (c.unlocked) {
         addHit(x, y, cardW, cardH, (function (cid) {
           return function () { pickVsCard(cid); };
-        })(c.id));
+        })(c.id), "card:" + c.id);
       }
     }
 
@@ -5548,7 +5790,7 @@
       if (c.unlocked) {
         addHit(x, y, cardW, cardH, (function (cid) {
           return function () { applyPlayerPick(cid); };
-        })(c.id));
+        })(c.id), "card:" + c.id);
       }
     }
 
@@ -5775,6 +6017,8 @@
     for (gi = 0; gi < projectiles.length; gi++) batch.push({ y: projectiles[gi].y + 70, kind: "p", who: projectiles[gi] });
     for (gi = 0; gi < swords.length; gi++) batch.push({ y: swords[gi].y, kind: "b", who: swords[gi] });
     batch.sort(function (a, b) { return a.y - b.y; });
+    // pages25: 吸引 vortex is painted behind the fighters so it no longer covers Pain's body
+    for (gi = 0; gi < fightersDraw.length; gi++) drawPullStreams(fightersDraw[gi]);
     for (gi = 0; gi < batch.length; gi++) {
       if (batch[gi].kind === "f") drawFighter(batch[gi].who);
       else if (batch[gi].kind === "g") drawGhost(batch[gi].who);
@@ -5784,7 +6028,6 @@
     drawBursts();
     for (gi = 0; gi < fightersDraw.length; gi++) {
       if (fightersDraw[gi].shield > 0 && !fightersDraw[gi].repulseOn) drawAirShield(fightersDraw[gi]);
-      drawPullStreams(fightersDraw[gi]);
     }
     drawSparks();
     drawFloaters();
@@ -5869,6 +6112,7 @@
       }
       if (matchState === "fight" && gameMode !== "practice") {
         // pages23: round timer = real seconds (ignores simSpeed and frame hitches).
+        fightClockTick();
         matchTime = Math.max(0, fightClock.limit - fightClockElapsed());
         if (matchTime <= 0) {
           matchTime = 0;
@@ -6106,17 +6350,20 @@
     };
   }
 
-  canvas.addEventListener("mousedown", function (e) {
-    if (e.button !== 0) return;
+  // pages25: ONE pointerdown handler for every UI hit (menus + fight HUD + practice panel).
+  // The old mousedown+pointerdown pair needed a 220ms latch and a 50ms "screen changed" guard
+  // to avoid double-firing; those guards were what swallowed the first click on a new screen.
+  canvas.addEventListener("pointerdown", function (e) {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
     var pt = canvasPoint(e);
     if (!pt) return;
-    if (stickAt(pt.x, pt.y)) return;
+    if (!isMenuState() && matchState !== "loading" && stickAt(pt.x, pt.y)) return;
     var hi;
-    if (performance.now() < uiLatch || performance.now() - screenChangeAt < 50) return;
     for (hi = hudHits.length - 1; hi >= 0; hi--) {
       var zone = hudHits[hi];
       if (pt.x >= zone.x && pt.x <= zone.x + zone.w && pt.y >= zone.y && pt.y <= zone.y + zone.h) {
-        uiLatch = performance.now() + 220;
+        e.preventDefault();
+        lastUiHit = { tag: zone.tag, t: performance.now(), state: matchState };
         zone.fn();
         return;
       }
@@ -6149,25 +6396,6 @@
       hit: false,
       owner: swordF.id
     });
-  });
-
-  // Canvas UI handles intro / mode / charSelect / rematch hits via hudHits (mousedown + pointerdown).
-
-  canvas.addEventListener("pointerdown", function (e) {
-    if (matchState !== "intro" && matchState !== "mode" && matchState !== "charSelect" && matchState !== "result" && matchState !== "loading") return;
-    var pt = canvasPoint(e);
-    if (!pt) return;
-    var hi;
-    if (performance.now() < uiLatch || performance.now() - screenChangeAt < 50) return;
-    for (hi = hudHits.length - 1; hi >= 0; hi--) {
-      var zone = hudHits[hi];
-      if (pt.x >= zone.x && pt.x <= zone.x + zone.w && pt.y >= zone.y && pt.y <= zone.y + zone.h) {
-        uiLatch = performance.now() + 220;
-        e.preventDefault();
-        zone.fn();
-        return;
-      }
-    }
   }, { passive: false });
 
   window.__DUEL_DEBUG__ = function () {
@@ -6186,7 +6414,7 @@
       selectedScrollL: selectedScrollL,
       selectedScrollR: selectedScrollR,
       fighters: activeFighters().map(function (f) {
-        return { id: f.id, name: f.name, kit: f.kit, hp: f.hp, hpChip: f.hpChip, x: f.x, y: f.y, team: teamOf(f), airH: f.airH || 0, airborne: !!f.airborne, pullOn: !!f.pullOn, repulseOn: !!f.repulseOn, anim: f.anim, knockPhase: f.knockPhase, knockT: f.knockT || 0, moveSpeed: f.moveSpeed, fireForm: !!f.fireForm, barrierT: f.barrierT || 0, chakra: f.chakra };
+        return { id: f.id, name: f.name, kit: f.kit, hp: f.hp, hpChip: f.hpChip, x: f.x, y: f.y, team: teamOf(f), airH: f.airH || 0, airborne: !!f.airborne, pullOn: !!f.pullOn, repulseOn: !!f.repulseOn, anim: f.anim, knockPhase: f.knockPhase, knockT: f.knockT || 0, moveSpeed: f.moveSpeed, fireForm: !!f.fireForm, barrierT: f.barrierT || 0, chakra: f.chakra, stun: +(f.stun || 0).toFixed(2), busy: +(f.busy || 0).toFixed(2), animT: +(f.animT || 0).toFixed(2), dashT: +(f.dashT || 0).toFixed(2), counterT: +(f.counterT || 0).toFixed(2), hyper: +(f.hyperArmor || 0).toFixed(2), phaseT: +(f.phase || 0).toFixed(2), invuln: +(f.invuln || 0).toFixed(2), facing: f.facing };
       }),
       roundWinsL: roundWinsL,
       roundWinsR: roundWinsR,
@@ -6210,7 +6438,10 @@
       sheetSizes: Object.keys(sheetImgs).map(function (k) { var b = sheetImgs[k]._bmp; return k + ":" + (b ? b.width + "x" + b.height : "-"); }),
       voidUntilLeft: voidSpace ? Math.max(0, (voidUntil - performance.now()) / 1000) : 0,
       fightElapsed: matchState === "fight" ? fightClockElapsed() : 0,
-      assetV: ASSET_V
+      assetV: ASSET_V,
+      lastUiHit: lastUiHit,
+      hits: hudHits.map(function (z) { return { t: z.tag, x: Math.round(z.x), y: Math.round(z.y), w: Math.round(z.w), h: Math.round(z.h) }; }),
+      W: W, H: H
     };
   };
   window.__DUEL_GOTO_SELECT__ = function (mode) {
