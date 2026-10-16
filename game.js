@@ -71,7 +71,7 @@
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 8;
-  var MAX_TRIES = 6;
+  var MAX_TRIES = 10;
   var loadQueue = [];
   var loadActive = 0;
   var loadMode = "idle"; // idle | match | prefetch
@@ -215,8 +215,8 @@
         pumpLoads();
         return;
       }
-      loadQueue.unshift(job);
-      pumpLoads();
+      // back off a little so a throttled/403 mirror gets a breather, then try the next host
+      setTimeout(function () { loadQueue.unshift(job); pumpLoads(); }, Math.min(3000, 400 * img._tries));
     }
     function done(how) {
       img._decodedBy = how;
