@@ -3207,6 +3207,10 @@
             if (p.kind === "fire") {
               rings.push({ x: target.x, y: target.y, life: 0.25, max: 0.25, color: "#ff8a3a" });
             }
+            if (p.kind === "rod") {
+              // pages25: visible impact where the 黑棒 connects
+              bursts.push({ x: target.x - (p.vx > 0 ? 18 : -18), y: Math.max(target.y - 160, Math.min(target.y - 40, p.y)), life: 0.22, max: 0.22, kind: "impact", facing: p.vx > 0 ? 1 : -1, scale: 0.8 });
+            }
             hitAny = true;
             break;
           }
@@ -3945,6 +3949,9 @@
       if (u < 0) u = 0;
       if (u > 0.999) u = 0.999;
       idx = Math.floor(u * 6);
+      // pages25: rod_04 in the source strip is only the flying rod (no body) — Pain vanished for
+      // a frame and the drawn rod looked like it flew through the target. Hold the throw pose instead.
+      if (f.anim === "rod" && idx === 3) idx = 2;
     } else if (f.gait === "run" || f.gait === "walk") {
       set = pain.run;
       idx = Math.floor(time * 11) % 6;
