@@ -77,7 +77,7 @@
   var charHover = -1;
   var cardImgs = {};
   (function loadCards() {
-    var ids = ["obito", "pain", "lockA", "lockB", "lockC", "lockD"];
+    var ids = ["obito", "pain", "tanjiro", "lockA", "lockB", "lockC"];
     var i;
     for (i = 0; i < ids.length; i++) {
       var img = new Image();
@@ -96,7 +96,7 @@
     var i;
     for (i = 0; i < SCROLL_DEFS.length; i++) {
       var img = new Image();
-      img.src = SCROLL_DEFS[i].icon + "?v=" + "pages18";
+      img.src = SCROLL_DEFS[i].icon + "?v=" + "pages19";
       scrollImgs[SCROLL_DEFS[i].id] = img;
     }
   })();
@@ -134,10 +134,10 @@
   var charRoster = [
     { id: "obito", name: "带土", unlocked: true, blurb: "虚化 · 喷火 · 空间" },
     { id: "pain", name: "佩恩天道", unlocked: true, blurb: "黑棒 · 气盾 · 吸引" },
+    { id: "tanjiro", name: "炭治郎", unlocked: true, blurb: "水之呼吸 · 火之形态" },
     { id: "lockA", name: "影", unlocked: false, blurb: "即将开放" },
     { id: "lockB", name: "焰", unlocked: false, blurb: "即将开放" },
-    { id: "lockC", name: "岚", unlocked: false, blurb: "即将开放" },
-    { id: "lockD", name: "烬", unlocked: false, blurb: "即将开放" }
+    { id: "lockC", name: "岚", unlocked: false, blurb: "即将开放" }
   ];
   var floaters = [];
   var projectiles = [];
@@ -155,7 +155,7 @@
   sharinganImg.src = "sharingan.png";
 
   // Bump when sprite PNGs change so browsers/CDN do not serve stale frames.
-  var ASSET_V = "pages18";
+  var ASSET_V = "pages19";
   function loadStrip(prefix, count, folder) {
     var arr = [];
     var i;
@@ -182,7 +182,7 @@
   };
   var portraitImgs = {};
   (function loadPortraits() {
-    var ids = ["obito", "pain"];
+    var ids = ["obito", "pain", "tanjiro"];
     var i;
     for (i = 0; i < ids.length; i++) {
       var img = new Image();
@@ -253,6 +253,45 @@
     pullFx: loadStrip("fx", 24, "pain/pull"),
     cloth: loadStrip("cloth", 12, "pain/cloth_float")
   };
+  function loadNumbered(folder, count) {
+    var arr = [];
+    var i;
+    for (i = 1; i <= count; i++) {
+      var img = new Image();
+      var n = i < 10 ? "0" + i : String(i);
+      img.src = folder + "/" + n + ".png?v=" + ASSET_V;
+      arr.push(img);
+    }
+    return arr;
+  }
+  function tanjiroFormFolder(fire) {
+    return fire ? "tanjiro/fire" : "tanjiro/water";
+  }
+  var tanjiro = {
+    idle: loadNumbered("tanjiro/idle", 8),
+    water: {
+      atk: loadNumbered("tanjiro/water/普攻", 6),
+      water2: loadNumbered("tanjiro/water/二型", 6),
+      water2c: loadNumbered("tanjiro/water/二型_反击斩", 6),
+      water4: loadNumbered("tanjiro/water/四型", 6),
+      water1: loadNumbered("tanjiro/water/一型", 6)
+    },
+    fire: {
+      atk: loadNumbered("tanjiro/fire/普攻", 6),
+      water2: loadNumbered("tanjiro/fire/二型", 6),
+      water2c: loadNumbered("tanjiro/fire/二型_反击斩", 6),
+      water4: loadNumbered("tanjiro/fire/四型", 6),
+      water1: loadNumbered("tanjiro/fire/一型", 6)
+    },
+    ult1: loadNumbered("tanjiro/ult/一段_变身", 6),
+    ult2: loadNumbered("tanjiro/ult/二段", 6)
+  };
+  // Match on-screen body height to Obito (~180 * obitoScale). Source foot line y=380 on 400 canvas.
+  var tanjiroScale = (180 * obitoScale) / 360;
+  var tanjiroFootPad = 20; // empty rows under soles
+  var tanjiroBodyW = 211 * tanjiroScale;
+  var tanjiroBodyH = 360 * tanjiroScale;
+
   var clothFps = 9;
   function plantCaster(f) {
     f.airH = 0;
@@ -457,6 +496,21 @@
         pull: { key: "J", name: "吸引", role: "控制", cd: 0, max: 3.38, cost: 18 },
         cleave: { key: "K", name: "重脚", role: "平A", cd: 0, max: 1.17, cost: 8 }
       }
+    },
+    tanjiro: {
+      name: "炭治郎",
+      weapon: "blade",
+      speed: 480,
+      palette: { body: "#1e4a52", trim: "#7ad0c8", glow: "#5ee0d0", deep: "#0c1c22", hot: "#ff6a3a" },
+      order: ["atk", "water2", "water4", "water1", "ult1", "ult2"],
+      skills: {
+        atk: { key: "Q", name: "普攻", role: "平A", cd: 0, max: 0.35, cost: 0 },
+        water2: { key: "E", name: "二型", role: "防御", cd: 0, max: 8, cost: 25 },
+        water4: { key: "R", name: "四型", role: "突进", cd: 0, max: 6, cost: 20 },
+        water1: { key: "F", name: "一型", role: "斩击", cd: 0, max: 7, cost: 22 },
+        ult1: { key: "C", name: "火之形态", role: "变身", cd: 0, max: 20, cost: 0 },
+        ult2: { key: "V", name: "瞬斩", role: "大招", cd: 0, max: 0, cost: 0 }
+      }
     }
   };
 
@@ -503,6 +557,14 @@
       f.pullAnimT = 0;
       f.pullApplied = false;
     }
+    f.baseMoveSpeed = def.speed;
+    f.fireForm = false;
+    f.barrierT = 0;
+    f.barrierUsed = false;
+    f.counterT = 0;
+    f.ult2Phase = 0;
+    f.ult2T = 0;
+    f.ult2Hits = 0;
   }
 
   function sideKeyLabels(side, orderLen) {
@@ -607,6 +669,7 @@
 
   function isObito(f) { return f && f.kit === "obito"; }
   function isPain(f) { return f && f.kit === "pain"; }
+  function isTanjiro(f) { return f && f.kit === "tanjiro"; }
 
   function isCoop() { return gameMode === "coop"; }
 
@@ -810,6 +873,15 @@
     f.repulseOn = false;
     f.repulseT = 0;
     f.repulseLong = false;
+    f.fireForm = false;
+    f.pendingFireForm = false;
+    f.barrierT = 0;
+    f.barrierUsed = false;
+    f.counterT = 0;
+    f.ult2Phase = 0;
+    f.ult2T = 0;
+    f.ult2Hits = 0;
+    if (f.baseMoveSpeed) f.moveSpeed = f.baseMoveSpeed;
   }
 
   function reset() {
@@ -911,6 +983,10 @@
       // 霸体: take damage, keep acting; immune to stun / knockback / launch from normal hits.
       // Grab/pull still moves the target via castPull (does not rely on hurt launch).
       spawnFloater(target.x + (Math.random() * 10 - 5), target.y - 178 - (target.airH || 0), "霸体", "#e07030");
+      if (isTanjiro(target) && (target.barrierT || 0) > 0 && !target.barrierUsed) {
+        var atkH = opts.attacker || other(target);
+        triggerTanjiroCounter(target, atkH);
+      }
       if (target.hp <= 0) onFighterKilled(target);
       return true;
     }
@@ -1124,9 +1200,13 @@
         selectedScrollR || SCROLL_DEFS[1].id
       );
     } else {
-      // Solo / practice: player picks one unlocked kit; opponent gets the other.
+      // Solo / practice: player picks one unlocked kit; AI gets another unlocked kit.
       var humanKit = selectedChar || "obito";
-      var aiKit = humanKit === "obito" ? "pain" : "obito";
+      var unlocked = unlockedKitIds();
+      var aiPool = [];
+      var ui;
+      for (ui = 0; ui < unlocked.length; ui++) if (unlocked[ui] !== humanKit) aiPool.push(unlocked[ui]);
+      var aiKit = aiPool.length ? aiPool[Math.floor(Math.random() * aiPool.length)] : "pain";
       var humanScroll = selectedScroll || SCROLL_DEFS[0].id;
       var aiScroll = pickAiScroll(humanScroll);
       if (humanKit === "pain") {
@@ -1170,7 +1250,20 @@
   function applySkillCd(f, sk, id) {
     if (!sk) return;
     if (skillNoCd(f, id)) { sk.cd = 0; return; }
-    sk.cd = sk.max * ((voidSpace && isObito(f)) ? 0.65 : 1);
+    var mul = (voidSpace && isObito(f)) ? 0.65 : 1;
+    if (isTanjiro(f) && f.fireForm && (id === "water2" || id === "water4" || id === "water1")) mul *= 1.4;
+    sk.cd = sk.max * mul;
+  }
+  function tanjiroStartup(f, base) {
+    return (isTanjiro(f) && f.fireForm) ? base * 0.7 : base;
+  }
+  function tanjiroDmg(f, base) {
+    var d = base;
+    if (isTanjiro(f) && f.fireForm) d *= 2;
+    return Math.round(d);
+  }
+  function tanjiroSet(f) {
+    return f.fireForm ? tanjiro.fire : tanjiro.water;
   }
 
   function finishMatch(result) {
@@ -1240,12 +1333,16 @@
     var sk = f.skills[id];
     if (!sk || sk.cd > 0) return;
     if ((id === "phase" || id === "needle") && f.phase > 0) return;
-    if ((f.chakra || 0) < (sk.cost || 0)) return;
+    if (id === "ult2" && !(isTanjiro(f) && f.fireForm)) return;
+    if (id === "ult1" && isTanjiro(f) && f.fireForm) return;
+    var cost = sk.cost || 0;
+    if (id === "ult1" && isTanjiro(f)) cost = Math.floor((f.chakra || 0) * 0.5);
+    if ((f.chakra || 0) < cost) return;
     // Using any other Obito skill during 虚化 drops out of it right away.
     if (isObito(f) && f.phase > 0 && id !== "phase") endPhase(f);
     if (id === "space" || id === "dash") {
       castSpace(f);
-      f.chakra -= sk.cost || 0;
+      f.chakra -= cost;
       return;
     }
     if (id === "spike") {
@@ -1254,12 +1351,12 @@
     }
     if (id === "phase" || id === "needle") {
       castNeedle(f);
-      f.chakra -= sk.cost || 0;
+      f.chakra -= cost;
       applySkillCd(f, sk, id);
       return;
     }
-    if (f.busy > 0 || f.dashT > 0) return;
-    f.chakra -= sk.cost || 0;
+    if (f.busy > 0 || f.dashT > 0 || (f.counterT || 0) > 0 || (f.ult2Phase || 0) > 0) return;
+    f.chakra -= cost;
     applySkillCd(f, sk, id);
     if (id === "punch") beginMelee(f, "punch", 0.56, 0.24);
     else if (id === "slash") beginMelee(f, "slash", 0.28, 0.08);
@@ -1271,7 +1368,127 @@
     else if (id === "tele" || id === "back") castBackstep(f);
     else if (id === "swap") castRetreat(f);
     else if (id === "pull") castPull(f);
+    else if (id === "atk") castTanjiroAtk(f);
+    else if (id === "water2") castTanjiroWater2(f);
+    else if (id === "water4") castTanjiroWater4(f);
+    else if (id === "water1") castTanjiroWater1(f);
+    else if (id === "ult1") castTanjiroUlt1(f);
+    else if (id === "ult2") castTanjiroUlt2(f);
     else if (id.indexOf("scroll_") === 0) castScroll(f, id);
+  }
+
+  function castTanjiroAtk(f) {
+    var start = tanjiroStartup(f, 0.12);
+    var dur = start + 0.38;
+    plantCaster(f);
+    beginMelee(f, "t_atk", dur, start + 0.08);
+    f.meleeDmg = tanjiroDmg(f, 12);
+    f.meleeRange = tanjiroBodyW * 1.35;
+  }
+  function castTanjiroWater2(f) {
+    var start = tanjiroStartup(f, 0.15);
+    plantCaster(f);
+    f.anim = "t_water2";
+    f.animT = 0;
+    f.animDur = start + 0.45;
+    f.busy = f.animDur;
+    f.hitPending = false;
+    f.barrierT = 1.5;
+    f.barrierUsed = false;
+    f.hyperArmor = Math.max(f.hyperArmor || 0, 1.5 + 0.55);
+    spawnFloater(f.x, f.y - 170, "水柱", f.palette.glow);
+    rings.push({ x: f.x, y: f.y - 40, life: 0.45, max: 0.45, color: "#5ee0d0", r0: 20, r1: tanjiroBodyW * 0.9 });
+  }
+  function castTanjiroWater4(f) {
+    var start = tanjiroStartup(f, 0.10);
+    plantCaster(f);
+    f.anim = "t_water4";
+    f.animT = 0;
+    f.animDur = start + 0.42;
+    f.busy = f.animDur;
+    f.hitPending = false;
+    f.hyperArmor = Math.max(f.hyperArmor || 0, 0.3);
+    var moveT = 0.22;
+    f.dashT = start + moveT;
+    f.dashVx = f.facing * (tanjiroBodyW * 2.5) / moveT;
+    f.dashVy = 0;
+    f.dashHit = false;
+    f.dashDmg = tanjiroDmg(f, 18);
+    f.dashDelay = start;
+  }
+  function castTanjiroWater1(f) {
+    var start = tanjiroStartup(f, 0.18);
+    plantCaster(f);
+    f.anim = "t_water1";
+    f.animT = 0;
+    f.animDur = start + 0.42;
+    f.busy = f.animDur;
+    f.hitPending = true;
+    f.hitAt = start + 0.06;
+    f.meleeDmg = tanjiroDmg(f, 20);
+    f.meleeRange = tanjiroBodyW * 1.5;
+    f.water1Blink = false;
+    f.water1At = start;
+  }
+  function castTanjiroUlt1(f) {
+    plantCaster(f);
+    f.anim = "t_ult1";
+    f.animT = 0;
+    f.animDur = 0.4 + 0.35;
+    f.busy = f.animDur;
+    f.hitPending = false;
+    f.pendingFireForm = true;
+    spawnFloater(f.x, f.y - 180, "火之形态", "#ff6a3a");
+    rings.push({ x: f.x, y: f.y - 50, life: 0.6, max: 0.6, color: "#ff6a3a", r0: 24, r1: 200 });
+  }
+  function enterFireForm(f) {
+    f.fireForm = true;
+    f.pendingFireForm = false;
+    f.moveSpeed = (f.baseMoveSpeed || 480) * 1.25;
+    spawnFloater(f.x, f.y - 160, "燃烧", "#ff8a40");
+  }
+  function exitFireForm(f) {
+    if (!f.fireForm) return;
+    f.fireForm = false;
+    f.moveSpeed = f.baseMoveSpeed || 480;
+    spawnFloater(f.x, f.y - 160, "熄灭", "#88c0c8");
+  }
+  function castTanjiroUlt2(f) {
+    plantCaster(f);
+    f.anim = "t_ult2";
+    f.animT = 0;
+    f.animDur = 0.2 + 1.5 + 0.35;
+    f.busy = f.animDur;
+    f.hitPending = false;
+    f.ult2Phase = 1;
+    f.ult2T = 0;
+    f.ult2Hits = 0;
+    f.hyperArmor = Math.max(f.hyperArmor || 0, f.animDur);
+    f.chakra = 0;
+    f.invuln = Math.max(f.invuln || 0, 0.25);
+    spawnFloater(f.x, f.y - 180, "瞬斩", "#ffd0a0");
+  }
+  function triggerTanjiroCounter(defender, attacker) {
+    if (!isTanjiro(defender) || defender.barrierUsed || !(defender.barrierT > 0)) return;
+    if (!attacker || attacker.hp <= 0) return;
+    defender.barrierUsed = true;
+    defender.barrierT = 0;
+    plantCaster(defender);
+    var behind = clampSpot(attacker.x - attacker.facing * tanjiroBodyW * 0.85, attacker.y);
+    defender.x = behind.x;
+    defender.y = behind.y;
+    defender.facing = attacker.x >= defender.x ? 1 : -1;
+    defender.anim = "t_counter";
+    defender.animT = 0;
+    defender.animDur = 0.55;
+    defender.busy = 0.55;
+    defender.counterT = 0.55;
+    defender.hitPending = true;
+    defender.hitAt = 0.22;
+    defender.meleeDmg = tanjiroDmg(defender, 18);
+    defender.meleeRange = tanjiroBodyW * 1.6;
+    defender.hyperArmor = Math.max(defender.hyperArmor || 0, 0.55);
+    spawnFloater(defender.x, defender.y - 170, "反击", defender.palette.glow);
   }
 
   function castScroll(f, id) {
@@ -1764,6 +1981,53 @@
     });
   }
 
+
+  function updateTanjiroUlt2(f, dt) {
+    // Phase 1 (0–1.5s after 0.2 startup): blink slashes around nearest enemies
+    // Phase 2: teleport behind nearest foe + horizontal finisher + slow-mo
+    var start = 0.2;
+    var t = f.ult2T || 0;
+    plantCaster(f);
+    if (t < start) return;
+    var active = t - start;
+    if (active < 1.5) {
+      var tick = Math.floor(active / 0.28);
+      if (tick > (f.ult2Hits || 0) && tick < 5) {
+        f.ult2Hits = tick;
+        var foes = livingEnemies(f);
+        var foe = foes.length ? foes[tick % foes.length] : other(f);
+        if (foe) {
+          var ang = Math.random() * Math.PI * 2;
+          var rad = 90 + Math.random() * 70;
+          var spot = clampSpot(foe.x + Math.cos(ang) * rad, foe.y + Math.sin(ang) * rad * 0.35);
+          ghosts.push({ x: f.x, y: f.y, facing: f.facing, life: 0.2, max: 0.2, palette: f.palette, weapon: f.weapon, owner: f.id, kit: f.kit });
+          f.x = spot.x;
+          f.y = spot.y;
+          f.facing = foe.x >= f.x ? 1 : -1;
+          hurt(foe, tanjiroDmg(f, 10), f.palette.hot, { attacker: f });
+          bursts.push({ x: foe.x, y: foe.y - 80, life: 0.22, max: 0.22, kind: "impact", facing: f.facing, scale: 1.2 });
+        }
+      }
+      return;
+    }
+    if (f.ult2Phase === 1) {
+      f.ult2Phase = 2;
+      var foe2 = other(f);
+      if (foe2) {
+        var behind = clampSpot(foe2.x - foe2.facing * tanjiroBodyW * 1.1, foe2.y);
+        ghosts.push({ x: f.x, y: f.y, facing: f.facing, life: 0.28, max: 0.28, palette: f.palette, weapon: f.weapon, owner: f.id, kit: f.kit });
+        f.x = behind.x;
+        f.y = behind.y;
+        f.facing = foe2.x >= f.x ? 1 : -1;
+        hurt(foe2, tanjiroDmg(f, 22), f.palette.hot, { attacker: f });
+        phaseSlow = Math.max(phaseSlow || 0, 0.35);
+        spawnFloater(foe2.x, foe2.y - 190, "终击", "#ffe7a0");
+        bursts.push({ x: foe2.x, y: foe2.y - 70, life: 0.35, max: 0.35, kind: "impact", facing: f.facing, scale: 1.8 });
+      }
+      exitFireForm(f);
+    }
+  }
+
   function resolveMelee(f) {
     var opp = other(f);
     var dx = opp.x - f.x;
@@ -1781,6 +2045,9 @@
       if (inFront && dist < 132) hurt(opp, 8, right.palette.glow);
     } else if (f.anim === "kick") {
       if (inFront && dist < 156) hurt(opp, 16, right.palette.glow);
+    } else if (f.anim === "t_atk" || f.anim === "t_water1" || f.anim === "t_counter") {
+      var rng = f.meleeRange || (tanjiroBodyW * 1.4);
+      if (inFront && dist < rng) hurt(opp, f.meleeDmg || 12, f.palette.glow, { attacker: f });
     }
   }
 
@@ -1894,6 +2161,35 @@
         tryCast(f, "spike");
         return;
       }
+    } else if (isTanjiro(f)) {
+      if (f.fireForm && f.skills.ult2 && Math.random() < 0.35) {
+        tryCast(f, "ult2");
+        return;
+      }
+      if (!f.fireForm && dist < 220 && f.skills.ult1 && f.skills.ult1.cd <= 0 && f.chakra > 40 && Math.random() < 0.12) {
+        tryCast(f, "ult1");
+        return;
+      }
+      if (dist < 130 && f.skills.atk && f.skills.atk.cd <= 0) {
+        tryCast(f, "atk");
+        return;
+      }
+      if (dist < 200 && f.skills.water4 && f.skills.water4.cd <= 0 && f.chakra >= 20 && Math.random() < 0.4) {
+        tryCast(f, "water4");
+        return;
+      }
+      if (dist < 160 && f.skills.water1 && f.skills.water1.cd <= 0 && f.chakra >= 22 && Math.random() < 0.35) {
+        tryCast(f, "water1");
+        return;
+      }
+      if (dist < 150 && f.skills.water2 && f.skills.water2.cd <= 0 && f.chakra >= 25 && Math.random() < 0.22) {
+        tryCast(f, "water2");
+        return;
+      }
+      if (f.scrollId && f.skills[f.scrollId] && f.skills[f.scrollId].cd <= 0 && f.chakra >= (f.skills[f.scrollId].cost || 0) && Math.random() < 0.1) {
+        tryCast(f, f.scrollId);
+        return;
+      }
     } else {
       if (dist < 130 && f.skills.punch && f.skills.punch.cd <= 0) {
         tryCast(f, "punch");
@@ -1963,8 +2259,21 @@
       if (f.chakraLock > 0) {
         f.chakraLock = Math.max(0, f.chakraLock - dt);
         f.chakra = f.maxChakra;
+      } else if (isTanjiro(f) && f.fireForm) {
+        f.chakra = Math.max(0, f.chakra - 8 * dt);
+        if (f.chakra <= 0) exitFireForm(f);
       } else if (f.chakra < f.maxChakra) {
         f.chakra = Math.min(f.maxChakra, f.chakra + 11.2 * dt);
+      }
+      if (isTanjiro(f) && (f.barrierT || 0) > 0) {
+        f.barrierT = Math.max(0, f.barrierT - dt);
+        if (f.barrierT <= 0 && !f.barrierUsed) {
+          f.barrierUsed = true;
+        }
+      }
+      if (isTanjiro(f) && (f.counterT || 0) > 0) {
+        f.counterT = Math.max(0, f.counterT - dt);
+        plantCaster(f);
       }
       if (f.flash > 0) f.flash = Math.max(0, f.flash - dt);
       if (f.invuln > 0) f.invuln = Math.max(0, f.invuln - dt);
@@ -2074,6 +2383,7 @@
       // Skill casters / Pain actions keep both feet on the ground.
       if (f.pullOn || f.repulseOn || (f.shieldWind || 0) > 0) plantCaster(f);
       if (isPain(f) && (f.busy > 0 || f.anim === "combo" || f.anim === "kick" || f.anim === "rod" || f.anim === "push" || f.anim === "back" || f.anim === "pull" || f.anim === "cast")) plantCaster(f);
+      if (isTanjiro(f) && (f.busy > 0 || (f.ult2Phase || 0) > 0 || (f.counterT || 0) > 0 || f.anim.indexOf("t_") === 0)) plantCaster(f);
       if (isAirborne(f)) {
         f.dashT = 0;
         f.gait = "idle";
@@ -2147,9 +2457,13 @@
 
       if (f.dashT > 0) {
         f.dashT -= dt;
+        if ((f.dashDelay || 0) > 0) {
+          f.dashDelay = Math.max(0, f.dashDelay - dt);
+          plantCaster(f);
+        } else {
         var prevX = f.x;
         var prevY = f.y;
-        var dashSpot = clampSpot(f.x + f.dashVx * dt, f.y + f.dashVy * dt);
+        var dashSpot = clampSpot(f.x + f.dashVx * dt, f.y + (f.dashVy || 0) * dt);
         f.x = dashSpot.x;
         f.y = dashSpot.y;
         if (!f.dashHit && !koId) {
@@ -2165,12 +2479,16 @@
           var cx = prevX + abx * t;
           var cy = prevY + aby * t;
           if (planarDist(opp.x, opp.y, cx, cy) < 48) {
-            if (hurt(opp, 16, f.palette.glow)) f.dashHit = true;
+            if (hurt(opp, f.dashDmg || 16, f.palette.glow, { attacker: f })) f.dashHit = true;
           }
+        }
         }
         if (f.dashT <= 0) {
           f.dashT = 0;
-          f.anim = "idle";
+          f.dashDelay = 0;
+          f.dashDmg = 0;
+          if (f.anim === "t_water4") { /* keep anim until animDur */ }
+          else f.anim = "idle";
         }
       } else {
         if (!koId && f.busy <= 0) walkFighter(f, dt);
@@ -2185,6 +2503,22 @@
           blinkStrike(f);
           f.teleBlinked = true;
         }
+        if (f.anim === "t_water1" && !f.water1Blink && f.animT >= (f.water1At || 0)) {
+          f.water1Blink = true;
+          var spot1 = clampSpot(f.x + f.facing * tanjiroBodyW, f.y);
+          ghosts.push({ x: f.x, y: f.y, facing: f.facing, life: 0.25, max: 0.25, palette: f.palette, weapon: f.weapon, owner: f.id, kit: f.kit });
+          f.x = spot1.x;
+          f.y = spot1.y;
+          f.facing = -f.facing;
+          plantCaster(f);
+        }
+        if (f.anim === "t_ult1" && f.pendingFireForm && f.animT >= 0.4) {
+          enterFireForm(f);
+        }
+        if ((f.ult2Phase || 0) > 0 && f.anim === "t_ult2") {
+          f.ult2T = (f.ult2T || 0) + dt;
+          updateTanjiroUlt2(f, dt);
+        }
         if (f.hitPending && f.animT >= f.hitAt) {
           f.hitPending = false;
           if (f.anim === "combo") spawnComboFlash(f);
@@ -2196,7 +2530,13 @@
           if (f.anim === "combo") spawnComboFlash(f);
           resolveMelee(f);
         }
-        if (f.animT >= f.animDur) f.anim = "idle";
+        if (f.animT >= f.animDur) {
+          if (f.anim === "t_ult2") {
+            exitFireForm(f);
+            f.ult2Phase = 0;
+          }
+          f.anim = "idle";
+        }
         }
       }
     }
@@ -2250,7 +2590,7 @@
         if (inBeam && !p.hit && prog > 0.12) {
           if (targetFb.phase > 0 || targetFb.invuln > 0) {
             /* phased: breath passes through */
-          } else if (hurt(targetFb, p.dmg, ownerFb.palette.glow)) {
+          } else if (hurt(targetFb, p.dmg, ownerFb.palette.glow, { attacker: ownerFb })) {
             p.hit = true;
             rings.push({ x: targetFb.x, y: targetFb.y, life: 0.28, max: 0.28, color: "#ff8a3a" });
           }
@@ -2278,7 +2618,7 @@
         if (planarDist(p.x, p.y, target.x, chestY) < hitR) {
           if (target.phase > 0 || target.invuln > 0) {
             /* ethereal: projectile passes through and is not a hit */
-          } else if (hurt(target, p.dmg, ownerProj.palette.glow)) {
+          } else if (hurt(target, p.dmg, ownerProj.palette.glow, { attacker: ownerProj })) {
             if (p.kind === "push") {
               var away = p.vx < 0 ? -1 : 1;
               var shoved = clampSpot(target.x + away * 110, target.y);
@@ -2877,8 +3217,8 @@
   }
 
   function drawGroundShadow(f) {
-    var body = isObito(f) ? obitoScale : painScale;
-    var lunging = f.anim === "punch" || f.anim === "tele" || f.anim === "breath" || f.anim === "thrust" || f.anim === "cleave" || f.anim === "slash" || f.anim === "dash" || f.anim === "swap" || f.anim === "combo" || f.anim === "kick" || f.anim === "rod" || f.anim === "push" || f.anim === "back";
+    var body = isObito(f) ? obitoScale : (isTanjiro(f) ? tanjiroScale * 1.15 : painScale);
+    var lunging = f.anim === "punch" || f.anim === "tele" || f.anim === "breath" || f.anim === "thrust" || f.anim === "cleave" || f.anim === "slash" || f.anim === "dash" || f.anim === "swap" || f.anim === "combo" || f.anim === "kick" || f.anim === "rod" || f.anim === "push" || f.anim === "back" || (f.anim && f.anim.indexOf("t_") === 0);
     var rx = 32;
     var ry = 9;
     var ox = 0;
@@ -3086,11 +3426,138 @@
     ctx.restore();
   }
 
+
+  function tanjiroImage(set, index) {
+    if (!set || !set.length) return null;
+    var i = index % set.length;
+    if (i < 0) i += set.length;
+    var img = set[i];
+    if (!img || !img.complete || !img.naturalWidth) return null;
+    return img;
+  }
+  function drawTanjiroAt(x, groundY, facing, set, index, alpha, tilt, shakeAmp) {
+    var img = tanjiroImage(set, index);
+    if (!img) return;
+    var sc = tanjiroScale;
+    var sx = 0;
+    var sy = 0;
+    if (shakeAmp && shakeAmp > 0) {
+      sx = (Math.random() * 2 - 1) * shakeAmp * 5;
+      sy = (Math.random() * 2 - 1) * shakeAmp * 2.5;
+      sc = sc * (1 - Math.min(0.08, shakeAmp * 0.35));
+    }
+    var dw = img.width * sc;
+    var dh = img.height * sc;
+    // Plant soles: source foot line ~20px above PNG bottom.
+    var y = groundY + 2 + tanjiroFootPad * sc;
+    ctx.save();
+    ctx.translate(x + sx, y + sy);
+    if (tilt) ctx.rotate(tilt);
+    // Art faces RIGHT (same as Obito).
+    ctx.scale(facing < 0 ? -1 : 1, 1);
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(img, -dw / 2, -dh, dw, dh);
+    ctx.restore();
+  }
+  function drawTanjiroBarrier(f) {
+    if (!(f.barrierT > 0) || f.barrierUsed) return;
+    var r = tanjiroBodyW * 0.8;
+    var h = tanjiroBodyH * 1.6;
+    var pulse = 0.55 + 0.45 * Math.sin(time * 10);
+    ctx.save();
+    ctx.translate(f.x, f.y - h * 0.42);
+    ctx.globalAlpha = 0.22 + 0.16 * pulse;
+    ctx.strokeStyle = "#5ee0d0";
+    ctx.lineWidth = 3;
+    ctx.shadowColor = "#7af0e0";
+    ctx.shadowBlur = 16;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, r, h * 0.5, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 0.12 + 0.08 * pulse;
+    ctx.fillStyle = "rgba(80,220,210,0.35)";
+    ctx.beginPath();
+    ctx.ellipse(0, 0, r * 0.85, h * 0.42, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+  function drawTanjiro(f) {
+    drawTanjiroBarrier(f);
+    var set = tanjiro.idle;
+    var idx = 0;
+    var alpha = 1;
+    var form = tanjiroSet(f);
+    var reacting = isAirborne(f) || isDowned(f) || ((f.stun || 0) > 0 && f.hitLight);
+    if (reacting) {
+      set = tanjiro.idle;
+      idx = 0;
+    } else if (f.anim === "t_atk") {
+      set = form.atk;
+      var u = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (u < 0) u = 0; if (u > 0.999) u = 0.999;
+      idx = Math.min(5, Math.floor(u * 6));
+    } else if (f.anim === "t_water2") {
+      set = form.water2;
+      var u2 = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (u2 < 0) u2 = 0; if (u2 > 0.999) u2 = 0.999;
+      idx = Math.min(5, Math.floor(u2 * 6));
+    } else if (f.anim === "t_counter") {
+      set = form.water2c;
+      var uc = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (uc < 0) uc = 0; if (uc > 0.999) uc = 0.999;
+      idx = Math.min(5, Math.floor(uc * 6));
+    } else if (f.anim === "t_water4") {
+      set = form.water4;
+      var u4 = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (u4 < 0) u4 = 0; if (u4 > 0.999) u4 = 0.999;
+      idx = Math.min(5, Math.floor(u4 * 6));
+    } else if (f.anim === "t_water1") {
+      set = form.water1;
+      var u1 = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (u1 < 0) u1 = 0; if (u1 > 0.999) u1 = 0.999;
+      idx = Math.min(5, Math.floor(u1 * 6));
+    } else if (f.anim === "t_ult1") {
+      set = tanjiro.ult1;
+      var uu = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (uu < 0) uu = 0; if (uu > 0.999) uu = 0.999;
+      idx = Math.min(5, Math.floor(uu * 6));
+    } else if (f.anim === "t_ult2") {
+      set = tanjiro.ult2;
+      var u7 = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (u7 < 0) u7 = 0; if (u7 > 0.999) u7 = 0.999;
+      idx = Math.min(5, Math.floor(u7 * 6));
+    } else if (f.gait === "run" || f.gait === "walk") {
+      set = tanjiro.idle;
+      idx = Math.floor(time * 10) % 8;
+    } else {
+      set = tanjiro.idle;
+      idx = Math.floor(time * 8) % 8;
+    }
+    if (f.invuln > 0 && !isDowned(f) && !isAirborne(f) && Math.sin(time * 40) > 0) alpha *= 0.45;
+    if (f.fireForm) {
+      // soft fire tint aura under sprite
+      ctx.save();
+      ctx.globalAlpha = 0.18;
+      ctx.fillStyle = "#ff6a3a";
+      ctx.beginPath();
+      ctx.ellipse(f.x, f.y - tanjiroBodyH * 0.45, 36, 58, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+    var drawAir = (f.airH || 0);
+    if (f.busy > 0 || (f.ult2Phase || 0) > 0 || (f.counterT || 0) > 0 || (f.anim && f.anim.indexOf("t_") === 0)) drawAir = 0;
+    drawTanjiroAt(f.x, f.y - drawAir, f.facing, set, idx, alpha, fighterDrawTilt(f), f.hitShake || 0);
+  }
+
   function drawFighter(f) {
     drawGroundShadow(f);
     drawHyperArmorAura(f);
     if (isObito(f)) {
       drawObito(f);
+      return;
+    }
+    if (isTanjiro(f)) {
+      drawTanjiro(f);
       return;
     }
     drawPain(f);
@@ -3123,6 +3590,10 @@
     var a = Math.max(0, g.life / g.max) * (g.alpha || 0.45);
     if (g.kit === "obito" || (!g.kit && g.owner === "L")) {
       drawObitoAt(g.x, g.y, g.facing, obito.idle, 0, a);
+      return;
+    }
+    if (g.kit === "tanjiro") {
+      drawTanjiroAt(g.x, g.y, g.facing, tanjiro.idle, 0, a, 0, 0);
       return;
     }
     if (g.kit === "pain" || (!g.kit && g.owner === "R")) {
@@ -3878,6 +4349,19 @@
       ctx.fillStyle = "#ff9040";
       ctx.textAlign = fromRight ? "right" : "left";
       ctx.fillText("霸体 " + Math.ceil(f.hyperArmor) + "s", fromRight ? bx + bw : bx, by + 20);
+    }
+    if (isTanjiro(f) && f.fireForm) {
+      ctx.fillStyle = "#ff6a3a";
+      ctx.font = "bold 12px sans-serif";
+      ctx.textAlign = fromRight ? "right" : "left";
+      ctx.fillText("火之形态", fromRight ? bx + bw : bx, by + ((f.hyperArmor || 0) > 0 ? 36 : 20));
+    }
+    if (isTanjiro(f) && (f.barrierT || 0) > 0 && !f.barrierUsed) {
+      ctx.fillStyle = "#5ee0d0";
+      ctx.font = "bold 12px sans-serif";
+      ctx.textAlign = fromRight ? "right" : "left";
+      var byOff = 20 + ((f.hyperArmor || 0) > 0 ? 16 : 0) + (f.fireForm ? 16 : 0);
+      ctx.fillText("水柱 " + f.barrierT.toFixed(1) + "s", fromRight ? bx + bw : bx, by + byOff);
     } else if (f.chakraLock > 0) {
       ctx.font = "bold 11px sans-serif";
       ctx.fillStyle = "#7ad0ff";
@@ -4108,7 +4592,7 @@
     ctx.font = "18px sans-serif";
     ctx.fillStyle = "rgba(210,230,240,0.9)";
     var lines = [
-      "三局两胜对决。带土擅长虚化与空间，佩恩天道掌控黑棒与气盾。",
+      "三局两胜对决。带土虚化空间，佩恩天道黑棒气盾，炭治郎水之呼吸与火之形态。",
       "开局可选单人人机、双人对战，或联机并肩打两名人机。",
       "移动：P1 WASD / P2 方向键（或摇杆），技能点按图标或快捷键。",
       "受击会产生僵直，伤害越高停顿越久。"
