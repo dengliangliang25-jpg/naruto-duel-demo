@@ -70,7 +70,7 @@
   var ASSET_V = "pages24";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [] };
   var assetErrors = [];
-  var LOAD_CONCURRENCY = 6;
+  var LOAD_CONCURRENCY = 8;
   var MAX_TRIES = 6;
   var loadQueue = [];
   var loadActive = 0;
@@ -82,6 +82,22 @@
   var frameCache = {};
   var coreReady = false;
 
+  // pages24: mirror hosts. Each file is pinned to one host (round-robin) so the browser
+  // opens several independent connections; a retry moves the file to the next host.
+  var ASSET_COMMIT = "948183d428e375d391b57faef2063837e7ac06fb";
+  var MIRRORS = [""].concat(ASSET_COMMIT.indexOf("__") === 0 ? [] : [
+    "https://cdn.jsdelivr.net/gh/dengliangliang25-jpg/naruto-duel-demo@" + ASSET_COMMIT + "/",
+    "https://gcore.jsdelivr.net/gh/dengliangliang25-jpg/naruto-duel-demo@" + ASSET_COMMIT + "/",
+    "https://testingcf.jsdelivr.net/gh/dengliangliang25-jpg/naruto-duel-demo@" + ASSET_COMMIT + "/"
+  ]);
+  var mirrorRR = 0;
+  function mirrorUrl(img, attempt) {
+    if (img._mirror == null) img._mirror = (mirrorRR++) % MIRRORS.length;
+    var h = MIRRORS[(img._mirror + attempt) % MIRRORS.length];
+    var rel = img._rel || String(img._src).split("?")[0];
+    if (!h) return rel + "?v=" + ASSET_V + (attempt ? "&r=" + attempt + "_" + Math.floor(Math.random() * 1e6) : "");
+    return h + encodeURI(rel) + (attempt ? "?r=" + attempt + "_" + Math.floor(Math.random() * 1e6) : "");
+  }
   function assetUrl(src) {
     var base = String(src).split("?")[0];
     if (!/\.webp$/i.test(base) && !/\.json$/i.test(base)) base = base.replace(/\.png$/i, ".webp");
@@ -171,7 +187,8 @@
     img._started = true;
     loadActive++;
     var tryN = (img._tries || 0);
-    var url = img._src + (tryN ? "&r=" + tryN + "_" + Math.floor(Math.random() * 1e6) : "");
+    var url = mirrorUrl(img, tryN);
+    img._lastUrl = url;
     var ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
     var bytes = img._bytes || 120000;
     var dlMs = 7000 + Math.round(bytes / 40); // 40 KB/s floor + 7s headroom
@@ -273,7 +290,8 @@
     var now = performance.now(), out = [], i, r;
     for (i = 0; i < inflightJobs.length && out.length < 4; i++) {
       r = inflightJobs[i];
-      out.push(fileName(r.img._src) + " · " + r.stage + " " + ((now - r.t0) / 1000).toFixed(0) + "s" + (r.img._tries ? " · 第" + (r.img._tries + 1) + "次" : ""));
+      var hostTag = (r.img._lastUrl || "").indexOf("jsdelivr") >= 0 ? (r.img._lastUrl.split("/")[2].split(".")[0]) : "pages";
+      out.push(fileName(r.img._src) + " @" + hostTag + " · " + r.stage + " " + ((now - r.t0) / 1000).toFixed(0) + "s" + (r.img._tries ? " · 第" + (r.img._tries + 1) + "次" : ""));
     }
     return out;
   }
@@ -281,6 +299,7 @@
   function regImg(img, src, group, prio) {
     if (!ASSET_GROUPS[group]) group = "core";
     img._src = assetUrl(src);
+    img._rel = String(img._src).split("?")[0];
     img._started = false;
     img._prio = prio || (group === "core" ? "core" : "kit");
     ASSET_GROUPS[group].push(img);
@@ -6301,8 +6320,16 @@
   (function bootAssets() {
     // Menu art first (cards + scroll icons were enqueued at registration); stage/portraits follow.
     ensureGroups(["core"], "core");
-    fetch(assetUrl("sheets/manifest.json"))
-      .then(function (r) { if (!r.ok) throw new Error("manifest " + r.status); return r.json(); })
+    function getManifest(attempt) {
+      var fake = { _rel: "sheets/manifest.json", _mirror: attempt % MIRRORS.length };
+      return withTimeout(fetch(mirrorUrl(fake, 0)).then(function (r) {
+        if (!r.ok) throw new Error("manifest " + r.status); return r.json();
+      }), 8000, "manifest").catch(function (e) {
+        if (attempt < 12) return getManifest(attempt + 1);
+        throw e;
+      });
+    }
+    getManifest(0)
       .then(function (m) {
         sheetManifest = m;
         var t = setInterval(function () {
