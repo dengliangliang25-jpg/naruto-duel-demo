@@ -70,7 +70,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
-  var ASSET_V = "pages29";
+  var ASSET_V = "pages30";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 8;
@@ -2651,12 +2651,8 @@
     }
     if (ix < 0) f.facing = -1;
     else if (ix > 0) f.facing = 1;
-    else {
-      // pages20: with no horizontal input, turn back toward the nearest foe
-      // (e.g. after Q's lunge carries Obito past the opponent).
-      var foeF = nearestEnemy(f);
-      if (foeF && foeF !== f && Math.abs(foeF.x - f.x) > 6) f.facing = foeF.x > f.x ? 1 : -1;
-    }
+    // pages30: keep last movement facing when idle (left stop stays left, right stays right).
+    // Skill casts still face the foe elsewhere; do not snap here.
     if (ix === 0 && iy === 0) {
       f.gait = "idle";
       return;
@@ -4066,12 +4062,13 @@
   // pages28: Tanjiro sheets were drawn facing different ways. Idle/walk/atk face LEFT;
   // dash/lunge sets mostly face RIGHT. Flip with a nativeDir so facing matches movement.
   function tanjiroNativeDir(set) {
-    if (!set) return -1;
-    if (set === tanjiro.idle || set === tanjiro.water.atk || set === tanjiro.fire.atk) return -1;
-    if (set === tanjiro.water.water2c || set === tanjiro.fire.water2c) return -1;
-    // pages29: 受击僵直 / 击飞帧原生朝右（被击向后=向左）
+    if (!set) return 1;
+    // pages30: idle/walk/atk art faces RIGHT (pages28 assumed left and inverted on screen).
+    if (set === tanjiro.idle || set === tanjiro.water.atk || set === tanjiro.fire.atk) return 1;
+    if (set === tanjiro.water.water2c || set === tanjiro.fire.water2c) return 1;
+    // hitstun/knockdown: native right
     if (set === tanjiro.hitstun || set === tanjiro.knock) return 1;
-    // 二型 / 四型 / 一型 / 大招：多数帧朝右
+    // 二型 / 四型 / 一型 / 大招
     return 1;
   }
   function drawTanjiroAt(x, groundY, facing, set, index, alpha, tilt, shakeAmp) {
