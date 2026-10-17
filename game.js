@@ -70,8 +70,8 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 30s stall → retry UI.
-  var ASSET_V = "pages31c";
-  var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [], ichigo: [] };
+  var ASSET_V = "pages31d";
+  var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [], ichigo: [], fushiguro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 6;
   var MAX_TRIES = 10;
@@ -428,6 +428,8 @@
       bindArr(ichigo.atk); bindArr(ichigo.getsuga); bindArr(ichigo.flash); bindArr(ichigo.block);
       bindArr(ichigo.bankaiIdle); bindArr(ichigo.bankaiRun); bindArr(ichigo.bankaiAtk);
       bindArr(ichigo.bankai); bindArr(ichigo.mugetsu); bindArr(ichigo.mugetsuFx);
+    } else if (kitId === "fushiguro") {
+      bindArr(fushiguro.idle); bindArr(fushiguro.run); bindArr(fushiguro.hitstun); bindArr(fushiguro.knock);
     }
   }
   function registerKitSheets(kitId) {
@@ -447,7 +449,7 @@
 
   var cardImgs = {};
   (function loadCards() {
-    var ids = ["obito", "pain", "tanjiro", "gojo", "luffy", "ichigo", "lockC"];
+    var ids = ["obito", "pain", "tanjiro", "gojo", "luffy", "ichigo", "fushiguro"];
     var i;
     for (i = 0; i < ids.length; i++) {
       var img = regImg(new Image(), "cards/" + ids[i] + ".png", "core", "core");
@@ -523,7 +525,7 @@
     { id: "gojo", name: "五条悟", unlocked: true, blurb: "无下限 · 苍 · 赫 · 领域" },
     { id: "luffy", name: "路飞", unlocked: true, blurb: "橡胶 · 二档 · 金刚枪" },
     { id: "ichigo", name: "一护", unlocked: true, blurb: "斩月 · 天锁斩月 · 无月" },
-    { id: "lockC", name: "岚", unlocked: false, blurb: "即将开放" }
+    { id: "fushiguro", name: "伏黑惠", unlocked: true, blurb: "影法术 · 玉犬 · 嵌合庭" }
   ];
   var floaters = [];
   var projectiles = [];
@@ -563,7 +565,7 @@
   };
   var portraitImgs = {};
   (function loadPortraits() {
-    var ids = ["obito", "pain", "tanjiro", "gojo", "luffy", "ichigo"];
+    var ids = ["obito", "pain", "tanjiro", "gojo", "luffy", "ichigo", "fushiguro"];
     var i;
     for (i = 0; i < ids.length; i++) {
       var img = regImg(new Image(), "portraits/" + ids[i] + ".png", "core", "core");
@@ -733,6 +735,19 @@
   var ichigoScale = (180 * obitoScale) / 436;
   var ichigoBodyW = 160 * ichigoScale;
   var ichigoBodyH = 378 * ichigoScale;
+
+  // pages31d: 伏黑惠基础 — idle/run/hitstun/knock；技能桩可玩，专属帧第2批后补
+  var fushiguro = {
+    idle: loadNumbered("fushiguro/idle", 8),
+    run: loadNumbered("fushiguro/run", 8),
+    hitstun: loadNumbered("fushiguro/hitstun", 6),
+    knock: loadNumbered("fushiguro/knockdown", 6)
+  };
+  // canvas 320×436；opaque ~108×355；脚底距底 ~8px；面朝右 → nativeDir +1
+  var fushiFootPad = 8;
+  var fushiScale = (180 * obitoScale) / 436;
+  var fushiBodyW = 110 * fushiScale;
+  var fushiBodyH = 355 * fushiScale;
 
   var clothFps = 9;
   function plantCaster(f) {
@@ -999,6 +1014,21 @@
         bankai: { key: "C", name: "天锁斩月", role: "变身", cd: 0, max: 20, cost: 0 },
         mugetsu: { key: "V", name: "无月", role: "大招", cd: 0, max: 0, cost: 0 }
       }
+    },
+    fushiguro: {
+      name: "伏黑惠",
+      weapon: "blade",
+      speed: 500,
+      palette: { body: "#1a2438", trim: "#6a90c8", glow: "#5080ff", deep: "#0a1020", hot: "#a0c0ff" },
+      order: ["atk", "dogs", "nue", "elephant", "shadow", "domain"],
+      skills: {
+        atk: { key: "Q", name: "影刺", role: "平A", cd: 0, max: 0.35, cost: 0 },
+        dogs: { key: "E", name: "玉犬", role: "突进", cd: 0, max: 6, cost: 20 },
+        nue: { key: "R", name: "鵺", role: "远程", cd: 0, max: 2.2, cost: 22 },
+        elephant: { key: "F", name: "满象", role: "控制", cd: 0, max: 8, cost: 25 },
+        shadow: { key: "C", name: "影换", role: "闪避", cd: 0, max: 1.56, cost: 10 },
+        domain: { key: "V", name: "嵌合庭", role: "绝技", cd: 0, max: 20, cost: 0 }
+      }
     }
   };
 
@@ -1162,6 +1192,7 @@
   function isGojo(f) { return f && f.kit === "gojo"; }
   function isLuffy(f) { return f && f.kit === "luffy"; }
   function isIchigo(f) { return f && f.kit === "ichigo"; }
+  function isFushiguro(f) { return f && f.kit === "fushiguro"; }
 
   function isCoop() { return gameMode === "coop"; }
 
@@ -2019,7 +2050,7 @@
     if (id === "bankai" && isIchigo(f) && f.bankai) return;
     var cost = sk.cost || 0;
     if (id === "ult1" && isTanjiro(f)) cost = Math.floor((f.chakra || 0) * 0.5);
-    if (id === "domain" && isGojo(f)) cost = Math.floor((f.chakra || 0) * 0.5);
+    if (id === "domain" && (isGojo(f) || isFushiguro(f))) cost = Math.floor((f.chakra || 0) * 0.5);
     if (id === "gear2" && isLuffy(f)) cost = Math.floor((f.chakra || 0) * 0.5);
     if (id === "bankai" && isIchigo(f)) cost = Math.floor((f.chakra || 0) * 0.5);
     if ((f.chakra || 0) < cost) return;
@@ -2068,6 +2099,7 @@
       if (isGojo(f)) castGojoAtk(f);
       else if (isLuffy(f)) castLuffyAtk(f);
       else if (isIchigo(f)) castIchigoAtk(f);
+      else if (isFushiguro(f)) castFushiAtk(f);
       else castTanjiroAtk(f);
     }
     else if (id === "water2") castTanjiroWater2(f);
@@ -2078,7 +2110,10 @@
     else if (id === "blue") castGojoBlue(f);
     else if (id === "red") castGojoRed(f);
     else if (id === "blink") castGojoBlink(f);
-    else if (id === "domain") castGojoDomain(f);
+    else if (id === "domain") {
+      if (isFushiguro(f)) castFushiDomain(f);
+      else castGojoDomain(f);
+    }
     else if (id === "gatling") castLuffyGatling(f);
     else if (id === "pistol") castLuffyPistol(f);
     else if (id === "balloon") castLuffyBalloon(f);
@@ -2089,6 +2124,10 @@
     else if (id === "block") castIchigoBlock(f);
     else if (id === "bankai") castIchigoBankai(f);
     else if (id === "mugetsu") castIchigoMugetsu(f);
+    else if (id === "dogs") castFushiDogs(f);
+    else if (id === "nue") castFushiNue(f);
+    else if (id === "elephant") castFushiElephant(f);
+    else if (id === "shadow") castFushiShadow(f);
     else if (isTongLingId(id)) castScroll(f, id);
   }
 
@@ -2686,6 +2725,93 @@
     exitIchigoBankai(f);
     spawnFloater(f.x, f.y - 190, "无月", "#202028");
     rings.push({ x: f.x, y: f.y - ichigoBodyH * 0.4, life: 0.8, max: 0.8, color: "rgba(20,20,28,0.75)", r0: 30, r1: 420 });
+  }
+
+  // pages31d: 伏黑技能桩（专属帧第2批后补；基础帧可验 idle/run/受击/倒地）
+  function castFushiAtk(f) {
+    f.anim = "f_atk";
+    f.animT = 0;
+    f.animDur = 0.4;
+    f.busy = 0.36;
+    f.hitPending = true;
+    f.hitAt = 0.12;
+    f.meleeDmg = boosted(f, 13);
+    f.meleeRange = fushiBodyW * 1.35;
+    f.meleeLaunch = false;
+    rings.push({ x: f.x + f.facing * fushiBodyW * 0.5, y: f.y - fushiBodyH * 0.45, life: 0.28, max: 0.28, color: "rgba(80,128,255,0.7)", r0: 10, r1: fushiBodyW * 0.75 });
+  }
+  function castFushiDogs(f) {
+    f.anim = "f_dogs";
+    f.animT = 0;
+    f.animDur = 0.9;
+    f.busy = 0.9;
+    f.armor = Math.max(f.armor || 0, 0.2);
+    f.hitPending = true;
+    f.hitAt = 0.35;
+    f.meleeDmg = boosted(f, 22);
+    f.meleeRange = 280;
+    f.meleeLaunch = false;
+    f.dashT = 0.55;
+    f.dashVx = f.facing * 420;
+    rings.push({ x: f.x + f.facing * 80, y: f.y - 20, life: 0.55, max: 0.55, color: "rgba(40,40,60,0.65)", r0: 12, r1: 70 });
+  }
+  function castFushiNue(f) {
+    var dir = f.facing < 0 ? -1 : 1;
+    f.anim = "f_nue";
+    f.animT = 0;
+    f.animDur = 0.55;
+    f.busy = 0.45;
+    f.hitPending = false;
+    projectiles.push({
+      kind: "wave",
+      x: f.x + dir * 40,
+      y: f.y - fushiBodyH * 0.55,
+      vx: dir * 520,
+      vy: 0,
+      r: 18,
+      dmg: boosted(f, 22),
+      owner: f.id,
+      life: 0.95,
+      color: "#80a0ff"
+    });
+    rings.push({ x: f.x + dir * 55, y: f.y - fushiBodyH * 0.5, life: 0.3, max: 0.3, color: "#5080ff", r0: 8, r1: 52 });
+  }
+  function castFushiElephant(f) {
+    f.anim = "f_elephant";
+    f.animT = 0;
+    f.animDur = 1.0;
+    f.busy = 1.0;
+    f.armor = Math.max(f.armor || 0, 0.3);
+    f.hitPending = true;
+    f.hitAt = 0.35;
+    f.meleeDmg = boosted(f, 20);
+    f.meleeRange = 320;
+    f.meleeLaunch = false;
+    rings.push({ x: f.x + f.facing * 140, y: f.y - fushiBodyH * 0.35, life: 1.0, max: 1.0, color: "rgba(100,160,255,0.45)", r0: 20, r1: 110 });
+  }
+  function castFushiShadow(f) {
+    f.anim = "f_shadow";
+    f.animT = 0;
+    f.animDur = 0.28;
+    f.busy = 0.28;
+    f.invuln = Math.max(f.invuln || 0, 0.2);
+    f.hitPending = false;
+    f.x += f.facing * 160;
+    var lim = xLimits(f.y);
+    f.x = clamp(f.x, lim.min, lim.max);
+    rings.push({ x: f.x, y: f.y - 10, life: 0.35, max: 0.35, color: "rgba(20,20,40,0.7)", r0: 8, r1: 48 });
+  }
+  function castFushiDomain(f) {
+    f.anim = "f_domain";
+    f.animT = 0;
+    f.animDur = 0.45;
+    f.busy = 0.45;
+    f.armor = Math.max(f.armor || 0, 0.4);
+    f.hitPending = false;
+    f.domainT = 5;
+    f.chakraLock = Math.max(f.chakraLock || 0, 5);
+    spawnFloater(f.x, f.y - 190, "嵌合暗翳庭", "#5080ff");
+    rings.push({ x: f.x, y: f.y - 20, life: 0.6, max: 0.6, color: "rgba(20,20,40,0.8)", r0: 40, r1: 320 });
   }
 
     function beginMelee(f, anim, dur, hitAt, hitAt2) {
@@ -3392,6 +3518,35 @@
         tryCast(f, f.scrollId);
         return;
       }
+    } else if (isFushiguro(f)) {
+      if ((f.domainT || 0) <= 0 && dist < 280 && f.skills.domain && f.skills.domain.cd <= 0 && f.chakra > 40 && Math.random() < 0.05) {
+        tryCast(f, "domain");
+        return;
+      }
+      if (dist < 130 && f.skills.atk && f.skills.atk.cd <= 0) {
+        tryCast(f, "atk");
+        return;
+      }
+      if (dist < 280 && f.skills.dogs && f.skills.dogs.cd <= 0 && f.chakra >= 20 && Math.random() < 0.14) {
+        tryCast(f, "dogs");
+        return;
+      }
+      if (dist > 140 && dist < 480 && f.skills.nue && f.skills.nue.cd <= 0 && f.chakra >= 22 && Math.random() < 0.14) {
+        tryCast(f, "nue");
+        return;
+      }
+      if (dist < 300 && f.skills.elephant && f.skills.elephant.cd <= 0 && f.chakra >= 25 && Math.random() < 0.1) {
+        tryCast(f, "elephant");
+        return;
+      }
+      if (dist < 200 && f.skills.shadow && f.skills.shadow.cd <= 0 && f.chakra >= 10 && Math.random() < 0.1) {
+        tryCast(f, "shadow");
+        return;
+      }
+      if (f.scrollId && f.skills[f.scrollId] && f.skills[f.scrollId].cd <= 0 && f.chakra >= (f.skills[f.scrollId].cost || 0) && Math.random() < 0.05) {
+        tryCast(f, f.scrollId);
+        return;
+      }
     } else if (isTanjiro(f)) {
       if (f.fireForm && f.skills.ult2 && Math.random() < 0.16) {
         tryCast(f, "ult2");
@@ -3561,6 +3716,26 @@
           }
         }
       }
+      if (isFushiguro(f) && (f.domainT || 0) > 0) {
+        f.domainT = Math.max(0, f.domainT - dt);
+        if (f.domainT > 0) {
+          var foesF = activeFighters(), fi;
+          for (fi = 0; fi < foesF.length; fi++) {
+            var tf = foesF[fi];
+            if (!tf || tf === f || tf.hp <= 0 || tf.team === f.team) continue;
+            var fdx = tf.x - f.x, fdy = tf.y - f.y;
+            if (fdx * fdx + fdy * fdy < 320 * 320) {
+              if (!tf._fushiDomainTick) tf._fushiDomainTick = 0;
+              tf._fushiDomainTick += dt;
+              if (tf._fushiDomainTick >= 0.6) {
+                tf._fushiDomainTick = 0;
+                tf.stun = Math.max(tf.stun || 0, 0.25);
+                tf.hitLight = true;
+              }
+            }
+          }
+        }
+      }
       if (f.flash > 0) f.flash = Math.max(0, f.flash - dt);
       if (f.invuln > 0) f.invuln = Math.max(0, f.invuln - dt);
       if (f.phase > 0) {
@@ -3676,6 +3851,7 @@
       if (isGojo(f) && (f.busy > 0 || (f.anim && f.anim.indexOf("g_") === 0))) plantCaster(f);
       if (isLuffy(f) && (f.busy > 0 || (f.anim && f.anim.indexOf("l_") === 0))) plantCaster(f);
       if (isIchigo(f) && (f.busy > 0 || (f.anim && f.anim.indexOf("i_") === 0))) plantCaster(f);
+      if (isFushiguro(f) && (f.busy > 0 || (f.anim && f.anim.indexOf("f_") === 0))) plantCaster(f);
       if (isAirborne(f)) {
         f.dashT = 0;
         f.gait = "idle";
@@ -4587,7 +4763,7 @@
   }
 
   function drawGroundShadow(f) {
-    var body = isObito(f) ? obitoScale : (isTanjiro(f) ? tanjiroScale * 1.15 : (isGojo(f) ? gojoScale * 1.1 : (isLuffy(f) ? luffyScale * 1.1 : (isIchigo(f) ? ichigoScale * 1.1 : painScale))));
+    var body = isObito(f) ? obitoScale : (isTanjiro(f) ? tanjiroScale * 1.15 : (isGojo(f) ? gojoScale * 1.1 : (isLuffy(f) ? luffyScale * 1.1 : (isIchigo(f) ? ichigoScale * 1.1 : (isFushiguro(f) ? fushiScale * 1.1 : painScale)))));
     var lunging = f.anim === "punch" || f.anim === "tele" || f.anim === "breath" || f.anim === "thrust" || f.anim === "cleave" || f.anim === "slash" || f.anim === "dash" || f.anim === "swap" || f.anim === "combo" || f.anim === "kick" || f.anim === "rod" || f.anim === "push" || f.anim === "back" || (f.anim && f.anim.indexOf("t_") === 0);
     var rx = 32;
     var ry = 9;
@@ -5412,6 +5588,100 @@
     }
   }
 
+  function fushiImage(set, index) {
+    if (!set || !set.length) return null;
+    var i = index % set.length;
+    if (i < 0) i += set.length;
+    var img = set[i];
+    if (!img || !img.complete || !img.naturalWidth) return null;
+    return img;
+  }
+  // pages31d: fushiguro art faces RIGHT → nativeDir +1
+  function fushiNativeDir(set) {
+    return 1;
+  }
+  function drawFushiAt(x, groundY, facing, set, index, alpha, tilt, shakeAmp) {
+    var img = fushiImage(set, index);
+    if (!img) return;
+    var sc = fushiScale;
+    var sx = 0;
+    var sy = 0;
+    if (shakeAmp && shakeAmp > 0) {
+      sx = (Math.random() * 2 - 1) * shakeAmp * 5;
+      sy = (Math.random() * 2 - 1) * shakeAmp * 2.5;
+      sc = sc * (1 - Math.min(0.08, shakeAmp * 0.35));
+    }
+    var dw = img.width * sc;
+    var dh = img.height * sc;
+    var y = groundY + 2 + fushiFootPad * sc;
+    ctx.save();
+    ctx.translate(x + sx, y + sy);
+    if (tilt) ctx.rotate(tilt);
+    var nativeDir = fushiNativeDir(set);
+    ctx.scale((facing < 0 ? -1 : 1) * nativeDir, 1);
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(img, -dw / 2, -dh, dw, dh);
+    ctx.restore();
+  }
+  function drawFushiguro(f) {
+    var set = fushiguro.idle;
+    var idx = 0;
+    var alpha = 1;
+    var reacting = isAirborne(f) || isDowned(f) || ((f.stun || 0) > 0 && f.hitLight);
+    var drawFacing = f.facing;
+    if (reacting && (f.hitLeanDir || 0)) {
+      drawFacing = (f.hitLeanDir > 0) ? -1 : 1;
+    }
+    if ((f.knockPhase === "air" || isAirborne(f)) && fushiguro.knock && fushiguro.knock[0] && fushiguro.knock[0].complete) {
+      set = fushiguro.knock;
+      var kat = f.knockT || 0;
+      if (kat < 0.08) idx = 0;
+      else if (kat < 0.22) idx = 1;
+      else if (kat < 0.40) idx = 2;
+      else idx = 3;
+    } else if ((f.knockPhase === "down" || isDowned(f)) && fushiguro.knock && fushiguro.knock[0] && fushiguro.knock[0].complete) {
+      set = fushiguro.knock;
+      var kdt = f.knockT || 0;
+      if ((f.getUpT || 0) > 0) idx = 5;
+      else if (kdt < 0.18) idx = 4;
+      else idx = 5;
+    } else if (f.hitLight && (f.stun || 0) > 0 && fushiguro.hitstun && fushiguro.hitstun[0] && fushiguro.hitstun[0].complete) {
+      set = fushiguro.hitstun;
+      var su = 1 - Math.min(1, (f.stun || 0) / 0.55);
+      idx = Math.min(5, Math.floor(su * 6));
+    } else if (reacting) {
+      set = fushiguro.idle;
+      idx = 0;
+    } else if (f.anim && f.anim.indexOf("f_") === 0) {
+      // 技能帧第2批未到：播 idle 顶位，保留 busy/判定
+      set = fushiguro.idle;
+      idx = Math.min(7, Math.floor(((f.animT || 0) / Math.max(0.01, f.animDur || 0.4)) * 8));
+    } else if (f.gait === "run" || f.gait === "walk") {
+      set = (fushiguro.run && fushiguro.run[0] && fushiguro.run[0].complete) ? fushiguro.run : fushiguro.idle;
+      idx = Math.floor(time * 10) % 8;
+    } else {
+      set = fushiguro.idle;
+      idx = Math.floor(time * 8) % 8;
+    }
+    if (f.invuln > 0 && !isDowned(f) && !isAirborne(f) && Math.sin(time * 40) > 0) alpha *= 0.45;
+    var drawAir = (f.airH || 0);
+    if (f.busy > 0 || (f.anim && f.anim.indexOf("f_") === 0)) drawAir = 0;
+    var tiltUse = (set === fushiguro.hitstun || set === fushiguro.knock) ? 0 : fighterDrawTilt(f);
+    drawFushiAt(f.x, f.y - drawAir, drawFacing, set, idx, alpha, tiltUse, f.hitShake || 0);
+    if ((f.domainT || 0) > 0) {
+      var pulse = 0.55 + 0.45 * Math.sin(time * 8);
+      ctx.save();
+      ctx.translate(f.x, f.y - 8);
+      ctx.globalAlpha = 0.1 + 0.08 * pulse;
+      ctx.strokeStyle = "#5080ff";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 160, 28, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
   function drawFighter(f) {
     drawGroundShadow(f);
     drawHyperArmorAura(f);
@@ -5433,6 +5703,10 @@
     }
     if (isIchigo(f)) {
       drawIchigo(f);
+      return;
+    }
+    if (isFushiguro(f)) {
+      drawFushiguro(f);
       return;
     }
     drawPain(f);
@@ -5481,6 +5755,10 @@
     }
     if (g.kit === "ichigo") {
       drawIchigoAt(g.x, g.y, g.facing, ichigo.idle, 0, a, 0, 0);
+      return;
+    }
+    if (g.kit === "fushiguro") {
+      drawFushiAt(g.x, g.y, g.facing, fushiguro.idle, 0, a, 0, 0);
       return;
     }
     if (g.kit === "pain" || (!g.kit && g.owner === "R")) {
@@ -6465,11 +6743,11 @@
       ctx.font = "bold 12px sans-serif";
       ctx.textAlign = fromRight ? "right" : "left";
       ctx.fillText("无下限 " + f.phase.toFixed(1) + "s", fromRight ? bx + bw : bx, by + ((f.hyperArmor || 0) > 0 ? 36 : 20));
-    } else if (isGojo(f) && (f.domainT || 0) > 0) {
-      ctx.fillStyle = "#c080ff";
+    } else if ((isGojo(f) || isFushiguro(f)) && (f.domainT || 0) > 0) {
+      ctx.fillStyle = isFushiguro(f) ? "#5080ff" : "#c080ff";
       ctx.font = "bold 12px sans-serif";
       ctx.textAlign = fromRight ? "right" : "left";
-      ctx.fillText("领域 " + f.domainT.toFixed(1) + "s", fromRight ? bx + bw : bx, by + ((f.hyperArmor || 0) > 0 ? 36 : 20));
+      ctx.fillText((isFushiguro(f) ? "嵌合庭 " : "领域 ") + f.domainT.toFixed(1) + "s", fromRight ? bx + bw : bx, by + ((f.hyperArmor || 0) > 0 ? 36 : 20));
     }
     if (isTanjiro(f) && (f.barrierT || 0) > 0 && !f.barrierUsed) {
       ctx.fillStyle = "#5ee0d0";
@@ -8098,7 +8376,7 @@
           if (loadMode === "match") return;
           ["obito", "pain", "tanjiro"].forEach(function (k) { registerKitSheets(k); });
           loadMode = "prefetch";
-          ensureGroups(["obito", "pain", "tanjiro", "gojo", "luffy", "ichigo"], "prefetch");
+          ensureGroups(["obito", "pain", "tanjiro", "gojo", "luffy", "ichigo", "fushiguro"], "prefetch");
         }, 200);
       })
       .catch(function (e) { if (window.console) console.error("[manifest]", e); });
