@@ -69,11 +69,11 @@
   var selectedScrollR = null; // 2P right scroll
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
-  // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
-  var ASSET_V = "pages31b";
+  // core images. fetch+blob decode; match load exclusive; 30s stall → retry UI.
+  var ASSET_V = "pages31c";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [], ichigo: [] };
   var assetErrors = [];
-  var LOAD_CONCURRENCY = 8;
+  var LOAD_CONCURRENCY = 6;
   var MAX_TRIES = 10;
   var loadQueue = [];
   var loadActive = 0;
@@ -88,7 +88,9 @@
   // pages24: mirror hosts. Each file is pinned to one host (round-robin) so the browser
   // opens several independent connections; a retry moves the file to the next host.
   var ASSET_COMMIT = "ad2031ec0a0b8895cfbd263d5a7e5a263e3f25d4";
+  // pages31c: relative first; raw.githubusercontent before jsdelivr (China often stalls on jsDelivr).
   var MIRRORS = [""].concat(ASSET_COMMIT.indexOf("__") === 0 ? [] : [
+    "https://raw.githubusercontent.com/dengliangliang25-jpg/naruto-duel-demo/" + ASSET_COMMIT + "/",
     "https://cdn.jsdelivr.net/gh/dengliangliang25-jpg/naruto-duel-demo@" + ASSET_COMMIT + "/",
     "https://gcore.jsdelivr.net/gh/dengliangliang25-jpg/naruto-duel-demo@" + ASSET_COMMIT + "/",
     "https://testingcf.jsdelivr.net/gh/dengliangliang25-jpg/naruto-duel-demo@" + ASSET_COMMIT + "/"
@@ -193,6 +195,7 @@
     var url = mirrorUrl(img, tryN);
     img._lastUrl = url;
     var ctrl = (typeof AbortController !== "undefined") ? new AbortController() : null;
+    img._ctrl = ctrl;
     var bytes = img._bytes || 120000;
     var dlMs = 7000 + Math.round(bytes / 40); // 40 KB/s floor + 7s headroom
     var rec = { img: img, stage: "下载", t0: performance.now(), deadline: performance.now() + dlMs, url: url };
@@ -280,6 +283,13 @@
       if (ctrl) try { ctrl.abort(); } catch (e0) {}
       var wasDownloading = !finished;
       if (wasDownloading) finish();
+      if (img._softCancel) {
+        img._softCancel = false;
+        img._ctrl = null;
+        loadQueue.push({ img: img, prio: "prefetch" });
+        pumpLoads();
+        return;
+      }
       failRetry((e && e.message) || "error");
     });
   }
@@ -287,13 +297,15 @@
   setInterval(function () {
     if (matchState !== "loading") return;
     var now = performance.now();
-    if (now - lastLoadProgress > 20000) matchStall = true;
+    if (now - lastLoadProgress > 30000) matchStall = true;
   }, 1000);
   function loadStatusLines() {
     var now = performance.now(), out = [], i, r;
     for (i = 0; i < inflightJobs.length && out.length < 4; i++) {
       r = inflightJobs[i];
-      var hostTag = (r.img._lastUrl || "").indexOf("jsdelivr") >= 0 ? (r.img._lastUrl.split("/")[2].split(".")[0]) : "pages";
+      var lu = r.img._lastUrl || "", hostTag = "pages";
+      if (lu.indexOf("raw.githubusercontent") >= 0) hostTag = "raw";
+      else if (lu.indexOf("jsdelivr") >= 0) hostTag = lu.split("/")[2].split(".")[0];
       out.push(fileName(r.img._src) + " @" + hostTag + " · " + r.stage + " " + ((now - r.t0) / 1000).toFixed(0) + "s" + (r.img._tries ? " · 第" + (r.img._tries + 1) + "次" : ""));
     }
     return out;
@@ -1718,6 +1730,24 @@
     startAfterLoad();
   }
 
+
+  // pages31c: when a match starts, drop in-flight prefetch of unused kits so
+  // concurrency slots go to this fight's sheets (fixes 24/36 stalls on ichigo).
+  function abortNonMatchInflight(keepList) {
+    var keep = {}, i, j, g, rec, img;
+    for (i = 0; i < keepList.length; i++) {
+      g = ASSET_GROUPS[keepList[i]] || [];
+      for (j = 0; j < g.length; j++) keep[g[j]._rel] = true;
+    }
+    for (i = inflightJobs.slice(), j = 0; j < i.length; j++) {
+      rec = i[j];
+      img = rec.img;
+      if (keep[img._rel]) continue;
+      if (rec.stage !== "下载") continue;
+      img._softCancel = true;
+      if (img._ctrl) try { img._ctrl.abort(); } catch (e1) {}
+    }
+  }
   var loadKits = [];
   var loadT = 0;
   function startAfterLoad() {
@@ -1731,6 +1761,7 @@
     matchStall = false;
     matchLoadStartedAt = performance.now();
     noteProgress();
+    abortNonMatchInflight(loadKits.concat(["core"]));
     ensureGroups(loadKits.concat(["core"]), "match");
     loadT = 0;
     var pr = groupProgress(loadKits.concat(["core"]));
@@ -1766,7 +1797,7 @@
     if (pr.err || matchStall) {
       ctx.fillStyle = "#ff6060";
       if (pr.err) ctx.fillText("有 " + pr.err + " 张失败：" + String(assetErrors[0] || "").split("?")[0], W / 2, by + 60);
-      else ctx.fillText("加载卡住超过 20 秒，请重试（已加载 " + pr.done + "/" + pr.tot + "）", W / 2, by + 60);
+      else ctx.fillText("加载卡住超过 30 秒，请重试（已加载 " + pr.done + "/" + pr.tot + "）", W / 2, by + 60);
       flowButton(W / 2 - 170, by + 80, 160, 40, "重试", true, function () {
         matchStall = false;
         retryFailed(loadKits.concat(["core"]));
