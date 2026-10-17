@@ -70,7 +70,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
-  var ASSET_V = "pages30d";
+  var ASSET_V = "pages30e";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 8;
@@ -4090,10 +4090,10 @@
   // dash/lunge sets mostly face RIGHT. Flip with a nativeDir so facing matches movement.
   function tanjiroNativeDir(set) {
     if (!set) return 1;
-    // pages30: idle/walk/atk art faces RIGHT (pages28 assumed left and inverted on screen).
-    if (set === tanjiro.idle || set === tanjiro.water.atk || set === tanjiro.fire.atk) return 1;
-    if (set === tanjiro.water.water2c || set === tanjiro.fire.water2c) return 1;
-    // hitstun/knockdown: native right
+    // pages30e: idle/atk sheets face LEFT in source art; nativeDir -1 so facing+1 draws facing right.
+    if (set === tanjiro.idle || set === tanjiro.water.atk || set === tanjiro.fire.atk) return -1;
+    if (set === tanjiro.water.water2c || set === tanjiro.fire.water2c) return -1;
+    // hitstun/knockdown + dash/lunge sets face RIGHT in source
     if (set === tanjiro.hitstun || set === tanjiro.knock) return 1;
     // 二型 / 四型 / 一型 / 大招
     return 1;
