@@ -70,7 +70,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
-  var ASSET_V = "pages30v";
+  var ASSET_V = "pages30w";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 8;
@@ -2467,8 +2467,8 @@
     f.armor = Math.max(f.armor || 0, 0.3);
     f.hitPending = false;
     f.gear2 = true;
+    // pages30w: 进二档查克拉减半；不设 chakraLock，否则会每帧灌满蓝、drain 永不跑
     f.chakra = Math.max(0, Math.floor((f.chakra || 0) * 0.5));
-    f.chakraLock = Math.max(f.chakraLock || 0, 999);
     f.moveSpeed = (f.baseMoveSpeed || 500) * 1.25;
     spawnFloater(f.x, f.y - 190, "二档", "#ff6040");
   }
@@ -6057,7 +6057,8 @@
       ctx.textAlign = fromRight ? "right" : "left";
       var byOff = 20 + ((f.hyperArmor || 0) > 0 ? 16 : 0) + (f.fireForm ? 16 : 0);
       ctx.fillText("水柱 " + f.barrierT.toFixed(1) + "s", fromRight ? bx + bw : bx, by + byOff);
-    } else if (f.chakraLock > 0) {
+    } else if (f.chakraLock > 0 && !(isLuffy(f) && f.gear2)) {
+      // pages30w: 二档期间只显示「二档」，不显示 chakraLock 回蓝倒计时
       ctx.font = "bold 11px sans-serif";
       ctx.fillStyle = "#7ad0ff";
       ctx.textAlign = fromRight ? "right" : "left";
