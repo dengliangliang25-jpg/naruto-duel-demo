@@ -1,4 +1,4 @@
-# luffy（路飞）— batch 1+2
+# luffy（路飞）— batch 1+2+3
 
 ## 画布与朝向
 - 画布：`320×436` RGBA（每帧 PNG + WEBP）
@@ -14,5 +14,6 @@
 - skill_pistol×6 橡胶枪
 - skill_balloon×6 气球
 
-## 待补
-- 二档 / 金刚枪（batch 3）
+## Batch 3 二档 / 金刚枪（pages30v）
+- gear2_idle×8 · gear2_run×8 · gear2_attack×6
+- skill_konggun×6 金刚枪

@@ -70,7 +70,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
-  var ASSET_V = "pages30u";
+  var ASSET_V = "pages30v";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 8;
@@ -410,6 +410,7 @@
     } else if (kitId === "luffy") {
       bindArr(luffy.idle); bindArr(luffy.run); bindArr(luffy.hitstun); bindArr(luffy.knock);
       bindArr(luffy.atk); bindArr(luffy.gatling); bindArr(luffy.pistol); bindArr(luffy.balloon);
+      bindArr(luffy.gear2Idle); bindArr(luffy.gear2Run); bindArr(luffy.gear2Atk); bindArr(luffy.spear);
     }
   }
   function registerKitSheets(kitId) {
@@ -672,7 +673,7 @@
   var gojoBodyW = 145 * gojoScale;
   var gojoBodyH = 390 * gojoScale;
 
-  // pages30u: 路飞 +技能帧 attack/gatling/pistol/balloon；二档/金刚枪仍桩
+  // pages30v: 路飞全套 — +二档 idle/run/attack + 金刚枪
   var luffy = {
     idle: loadNumbered("luffy/idle", 8),
     run: loadNumbered("luffy/run", 8),
@@ -681,7 +682,11 @@
     atk: loadNumbered("luffy/attack", 6),
     gatling: loadNumbered("luffy/skill_gatling", 6),
     pistol: loadNumbered("luffy/skill_pistol", 6),
-    balloon: loadNumbered("luffy/skill_balloon", 6)
+    balloon: loadNumbered("luffy/skill_balloon", 6),
+    gear2Idle: loadNumbered("luffy/gear2_idle", 8),
+    gear2Run: loadNumbered("luffy/gear2_run", 8),
+    gear2Atk: loadNumbered("luffy/gear2_attack", 6),
+    spear: loadNumbered("luffy/skill_konggun", 6)
   };
   // canvas 320×436；面朝右 → nativeDir +1
   var luffyFootPad = 8;
@@ -2395,7 +2400,7 @@
     rings.push({ x: f.x, y: f.y - 40, life: 0.8, max: 0.8, color: "rgba(160,80,255,0.7)", r0: 40, r1: 350 });
   }
 
-  // pages30u: 路飞技能 — atk/gatling/pistol/balloon 有专属帧；gear2/spear 仍桩
+  // pages30v: 路飞技能 — atk/gatling/pistol/balloon + gear2/spear 专属帧
   function castLuffyAtk(f) {
     f.anim = "l_atk";
     f.animT = 0;
@@ -4981,8 +4986,8 @@
     } else if (reacting) {
       set = luffy.idle;
       idx = 0;
-    } else if (f.anim === "l_atk" && luffy.atk && luffy.atk[0] && luffy.atk[0].complete) {
-      set = luffy.atk;
+    } else if (f.anim === "l_atk" && ((f.gear2 && luffy.gear2Atk && luffy.gear2Atk[0] && luffy.gear2Atk[0].complete) || (luffy.atk && luffy.atk[0] && luffy.atk[0].complete))) {
+      set = (f.gear2 && luffy.gear2Atk && luffy.gear2Atk[0] && luffy.gear2Atk[0].complete) ? luffy.gear2Atk : luffy.atk;
       var ua = f.animDur > 0 ? f.animT / f.animDur : 1;
       if (ua < 0) ua = 0; if (ua > 0.999) ua = 0.999;
       idx = Math.min(5, Math.floor(ua * 6));
@@ -5001,15 +5006,27 @@
       var ub = f.animDur > 0 ? f.animT / f.animDur : 1;
       if (ub < 0) ub = 0; if (ub > 0.999) ub = 0.999;
       idx = Math.min(5, Math.floor(ub * 6));
+    } else if (f.anim === "l_gear2" && ((luffy.gear2Atk && luffy.gear2Atk[0] && luffy.gear2Atk[0].complete) || (luffy.gear2Idle && luffy.gear2Idle[0] && luffy.gear2Idle[0].complete))) {
+      // pages30v: 二档变身闪 — 优先播 gear2_attack 前几帧，短促
+      set = (luffy.gear2Atk && luffy.gear2Atk[0] && luffy.gear2Atk[0].complete) ? luffy.gear2Atk : luffy.gear2Idle;
+      var ug2 = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (ug2 < 0) ug2 = 0; if (ug2 > 0.999) ug2 = 0.999;
+      idx = (set === luffy.gear2Atk) ? Math.min(5, Math.floor(ug2 * 6)) : Math.min(7, Math.floor(ug2 * 8));
+    } else if (f.anim === "l_spear" && luffy.spear && luffy.spear[0] && luffy.spear[0].complete) {
+      set = luffy.spear;
+      var usp = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (usp < 0) usp = 0; if (usp > 0.999) usp = 0.999;
+      idx = Math.min(5, Math.floor(usp * 6));
     } else if (f.anim && f.anim.indexOf("l_") === 0) {
-      // pages30u: gear2/spear 等尚无专属帧，idle 顶位
-      set = luffy.idle;
+      set = (f.gear2 && luffy.gear2Idle && luffy.gear2Idle[0] && luffy.gear2Idle[0].complete) ? luffy.gear2Idle : luffy.idle;
       idx = Math.min(7, Math.floor(((f.animT || 0) / Math.max(0.01, f.animDur || 0.4)) * 8));
     } else if (f.gait === "run" || f.gait === "walk") {
-      set = (luffy.run && luffy.run[0] && luffy.run[0].complete) ? luffy.run : luffy.idle;
+      if (f.gear2 && luffy.gear2Run && luffy.gear2Run[0] && luffy.gear2Run[0].complete) set = luffy.gear2Run;
+      else set = (luffy.run && luffy.run[0] && luffy.run[0].complete) ? luffy.run : luffy.idle;
       idx = Math.floor(time * 10) % 8;
     } else {
-      set = luffy.idle;
+      if (f.gear2 && luffy.gear2Idle && luffy.gear2Idle[0] && luffy.gear2Idle[0].complete) set = luffy.gear2Idle;
+      else set = luffy.idle;
       idx = Math.floor(time * 8) % 8;
     }
     if (f.invuln > 0 && !isDowned(f) && !isAirborne(f) && Math.sin(time * 40) > 0) alpha *= 0.45;
