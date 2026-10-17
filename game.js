@@ -87,7 +87,7 @@
 
   // pages24: mirror hosts. Each file is pinned to one host (round-robin) so the browser
   // opens several independent connections; a retry moves the file to the next host.
-  var ASSET_COMMIT = "0f41048e0cce51205b9d86fb22c1f49b1b2ec988";
+  var ASSET_COMMIT = "__ASSET_COMMIT__";
   var MIRRORS = [""].concat(ASSET_COMMIT.indexOf("__") === 0 ? [] : [
     "https://cdn.jsdelivr.net/gh/dengliangliang25-jpg/naruto-duel-demo@" + ASSET_COMMIT + "/",
     "https://gcore.jsdelivr.net/gh/dengliangliang25-jpg/naruto-duel-demo@" + ASSET_COMMIT + "/",
@@ -622,8 +622,10 @@
     hitstun: loadNumbered("tanjiro/hitstun", 6),
     knock: loadNumbered("tanjiro/knockdown", 6)
   };
-  // Match on-screen body height to Obito (~180 * obitoScale). Source foot line y=380 on 400 canvas.
-  var tanjiroScale = (180 * obitoScale) / 360;
+  // Match on-screen body height to Obito (~180 * obitoScale).
+  // pages29: frames padded +36px on top so hair is not flush-cropped; foot line still ~20px above bottom.
+  var tanjiroTopPad = 36;
+  var tanjiroScale = (180 * obitoScale) / (360 + tanjiroTopPad);
   var tanjiroFootPad = 20; // empty rows under soles
   var tanjiroBodyW = 211 * tanjiroScale;
   var tanjiroBodyH = 360 * tanjiroScale;
@@ -2160,6 +2162,11 @@
     spawnFloater(f.x, f.y - 170, "无敌", "#d5dde4");
   }
 
+  // pages29: firebreath art tip locked at source (36,124); mouth world offset relative to feet.
+  var FIREBREATH_TIP_X = 36;
+  var FIREBREATH_TIP_Y = 124;
+  var FIREBREATH_MOUTH_OX = 28; // forward from body center
+  var FIREBREATH_MOUTH_OY = -118; // up from feet (fixed — do not bob with frame content)
   function castBreath(f) {
     var dir = f.facing < 0 ? -1 : 1;
     f.anim = "breath";
@@ -2170,8 +2177,8 @@
     f.hitPending = false;
     projectiles.push({
       kind: "firebreath",
-      x: f.x + dir * 26,
-      y: f.y - 118,
+      x: f.x + dir * FIREBREATH_MOUTH_OX,
+      y: f.y + FIREBREATH_MOUTH_OY,
       vx: 0,
       vy: 0,
       r: 20,
@@ -3176,9 +3183,9 @@
         var ownerFb = projectileOwner(p.owner);
         var dirFb = ownerFb.facing < 0 ? -1 : 1;
         p.facing = ownerFb.facing;
-        // Keep the flame tip glued to Obito's mouth.
-        p.x = ownerFb.x + dirFb * 26;
-        p.y = ownerFb.y - 118;
+        // pages29: pin stream origin to mouth every tick (no vertical bob from frame size).
+        p.x = ownerFb.x + dirFb * FIREBREATH_MOUTH_OX;
+        p.y = ownerFb.y + FIREBREATH_MOUTH_OY;
         var targetFb = projectileFoe(p.owner, p.x + dirFb * 200, p.y);
         var prog = p.age / 1.6;
         if (prog > 1) prog = 1;
@@ -4317,9 +4324,9 @@
           ctx.save();
           ctx.translate(p.x, p.y);
           ctx.scale(face < 0 ? -1 : 1, 1);
-          // Left tip of the art is the mouth anchor. No fillRect border — frames are pre-keyed.
+          // pages29: art tip (36,124) glued to mouth — only the stream extends forward.
           ctx.globalCompositeOperation = "source-over";
-          ctx.drawImage(fbImg, 0, -dhb * 0.45, dwb, dhb);
+          ctx.drawImage(fbImg, -FIREBREATH_TIP_X * scb, -FIREBREATH_TIP_Y * scb, dwb, dhb);
           ctx.restore();
         }
         return;
