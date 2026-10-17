@@ -2,7 +2,9 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
 <title>青岚 · 烬戟</title>
 <style>
   html, body {
@@ -10,6 +12,11 @@
     height: 100%;
     background: #07080c;
     overflow: hidden;
+    touch-action: none;
+    overscroll-behavior: none;
+    -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
     font-family: "PingFang SC", "Noto Sans SC", "Microsoft YaHei", "Source Han Sans SC", sans-serif;
   }
   canvas {
@@ -44,7 +51,14 @@
 (function(){var t0=Date.now(),el=document.getElementById("bootT");var iv=setInterval(function(){if(!document.getElementById("boot")){clearInterval(iv);return;}el.textContent=Math.round((Date.now()-t0)/1000)+"s";},500);
 window.addEventListener("error",function(e){var m=document.getElementById("bootMsg");if(m&&e&&e.target&&e.target.src)m.textContent="脚本加载失败，正在重试…";},true);})();
 </script>
-<script src="game.js?v=pages25r2" onerror="(function(s){var n=document.createElement('script');n.src='game.js?v=pages25r2&r='+Date.now();document.body.appendChild(n);})(this)"></script>
+<script src="game.js?v=pages26" onerror="(function(s){var n=document.createElement('script');n.src='game.js?v=pages26&r='+Date.now();document.body.appendChild(n);})(this)"></script>
 
+<script>
+(function(){var last=0;
+document.addEventListener("touchmove",function(e){e.preventDefault();},{passive:false});
+document.addEventListener("touchend",function(e){var n=Date.now();if(n-last<350)e.preventDefault();last=n;},{passive:false});
+["gesturestart","gesturechange","dblclick"].forEach(function(t){document.addEventListener(t,function(e){e.preventDefault();},{passive:false});});
+})();
+</script>
 </body>
 </html>

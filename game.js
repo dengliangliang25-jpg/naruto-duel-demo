@@ -67,7 +67,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
-  var ASSET_V = "pages25";
+  var ASSET_V = "pages26";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 8;
@@ -1734,6 +1734,24 @@
     for (k in scrollImgs) { im = scrollImgs[k]; if (!im._ok && !im._err) return false; }
     return true;
   }
+  // pages26: phone mode
+  var mobileMode = (function () {
+    try { var v = localStorage.getItem("duelDevice"); if (v === "mobile") return true; if (v === "pc") return false; } catch (e) {}
+    var ua = navigator.userAgent || "";
+    var coarse = !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
+    var touch = ("ontouchstart" in window) || (navigator.maxTouchPoints || 0) > 0;
+    var small = Math.min(screen.width, screen.height) <= 820;
+    return /Mobi|Android|iPhone|iPad|iPod/i.test(ua) || (touch && coarse && small);
+  })();
+  function setMobileMode(on) {
+    mobileMode = !!on;
+    try { localStorage.setItem("duelDevice", on ? "mobile" : "pc"); } catch (e) {}
+    if (mobileMode && (gameMode === "vs" || gameMode === "coop")) gameMode = "ai";
+  }
+  function isPortrait() { return mobileMode && window.innerHeight > window.innerWidth; }
+  function drawDeviceToggle() {
+    flowButton(W - 170, 16, 154, 34, mobileMode ? "手机模式 ⇄ 电脑" : "电脑模式 ⇄ 手机", false, function () { setMobileMode(!mobileMode); });
+  }
   function isMenuState() {
     return matchState === "intro" || matchState === "mode" || matchState === "charSelect" || matchState === "result";
   }
@@ -1783,7 +1801,7 @@
     if ((id === "phase" || id === "needle") && f.phase > 0) return;
     if (id === "ult2" && !(isTanjiro(f) && f.fireForm)) {
       // pages25: V is fire-form only; say so instead of silently ignoring the key
-      if (humanControls(f) && performance.now() - (f.needFireHintAt || 0) > 600) {
+      if (humanControls(f) && f.anim !== "t_ult2" && performance.now() - (f.ult2At || 0) > 2600 && performance.now() - (f.needFireHintAt || 0) > 600) {
         f.needFireHintAt = performance.now();
         spawnFloater(f.x, f.y - 190, "需火之形态（先按" + ((f.skills.ult1 && f.skills.ult1.key) || "C") + "）", "#ffb070");
       }
@@ -1937,6 +1955,8 @@
     spawnFloater(f.x, f.y - 160, "熄灭", "#88c0c8");
   }
   function castTanjiroUlt2(f) {
+    f.ult2At = performance.now(); // pages26: no 需火之形态 hint during/just after the V multi-hit
+    if (f.castBuf && f.castBuf.id === "ult2") f.castBuf = null;
     plantCaster(f);
     f.anim = "t_ult2";
     f.animT = 0;
@@ -5106,9 +5126,10 @@
     ctx.restore();
   }
 
-  function drawSkillOrb(cx, cy, f, id) {
+  function drawSkillOrb(cx, cy, f, id, rr) {
     var sk = f.skills[id];
-    var r = 26;
+    var r = rr || 26;
+    var big = r > 30;
     var needFire = id === "ult2" && isTanjiro(f) && !f.fireForm;
     var ready = !paused && matchState === "fight" && sk.cd <= 0 && !needFire && !(id === "spike" && (f.shield > 0 || f.shieldWind > 0)) && (f.chakra || 0) >= (sk.cost || 0);
     ctx.save();
@@ -5150,7 +5171,10 @@
     ctx.font = "bold 11px sans-serif";
     ctx.textAlign = "center";
     ctx.fillStyle = ready ? "#ffe7b0" : "rgba(200,180,150,0.45)";
-    ctx.fillText(sk.key, cx, cy + 20);
+    if (big) {
+      ctx.font = "bold " + Math.round(r * 0.32) + "px sans-serif";
+      ctx.fillText(sk.name, cx, cy + r * 0.72);
+    } else ctx.fillText(sk.key, cx, cy + 20);
     if (sk.max > 0 && sk.cd > 0) {
       var ratio = sk.cd / sk.max;
       ctx.beginPath();
@@ -5189,7 +5213,7 @@
     ctx.restore();
     addHit(cx - r, cy - r, r * 2, r * 2, function () {
       if (!humanControls(f)) return;
-      if (id === "spike") shieldPressDown(f);
+      if (id === "spike") { shieldPressDown(f); f.shieldTouch = true; }
       else tryCast(f, id);
     }, "skill:" + f.id + ":" + id);
   }
@@ -5386,6 +5410,8 @@
   }
 
   function drawModeScreen() {
+    if (mobileMode) { drawMobileModeScreen(); drawDeviceToggle(); return; }
+    drawDeviceToggle();
     panelBox(W / 2 - 340, 120, 680, 420);
     ctx.textAlign = "center";
     ctx.font = "bold 36px sans-serif";
@@ -5419,6 +5445,17 @@
     ctx.fillText("联机：P1 WASD + QERF… / P2 方向键 + UIO PJK… 并肩打两名随机人机", W / 2, 430);
     ctx.fillText("练习：无计时，可单独开关技能冷却；对手可选呆立木桩或简易人机", W / 2, 452);
     flowButton(W / 2 - 90, 470, 180, 44, "返回介绍", false, function () { goIntro(); });
+  }
+
+  function drawMobileModeScreen() {
+    panelBox(W / 2 - 300, 130, 600, 400);
+    ctx.textAlign = "center";
+    ctx.font = "bold 40px sans-serif";
+    ctx.fillStyle = "#f4fbff";
+    ctx.fillText("选择模式", W / 2, 200);
+    flowButton(W / 2 - 250, 250, 240, 110, "单人 · 人机", true, function () { gameMode = "ai"; goCharSelect(); });
+    flowButton(W / 2 + 10, 250, 240, 110, "练习模式", true, function () { gameMode = "practice"; playerSide = "L"; practicePanel = false; goCharSelect(); });
+    flowButton(W / 2 - 100, 420, 200, 60, "返回介绍", false, function () { goIntro(); });
   }
 
   function rosterById(id) {
@@ -5821,6 +5858,23 @@
   }
 
   function drawHud() {
+    drawHudInner();
+    if (isPortrait()) {
+      hudHits = [];
+      ctx.save();
+      ctx.fillStyle = "rgba(4,6,10,0.94)";
+      ctx.fillRect(0, 0, W, H);
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#f4fbff";
+      ctx.font = "bold 64px sans-serif";
+      ctx.fillText("请横屏", W / 2, H / 2);
+      ctx.font = "28px sans-serif";
+      ctx.fillStyle = "rgba(200,220,230,0.8)";
+      ctx.fillText("把手机横过来，体验更好", W / 2, H / 2 + 60);
+      ctx.restore();
+    }
+  }
+  function drawHudInner() {
     hudHits = [];
 
     if (matchState === "intro") {
@@ -5871,7 +5925,7 @@
         ctx.fillText(left.name + (((gameMode === "ai" || gameMode === "practice") && playerSide === "L") ? " · 你" : ((gameMode === "ai" || gameMode === "practice") ? " · AI" : "")), 16, 18);
         drawResourceBars(16, 26, 230, left, false);
         drawPortrait(278, 42, left);
-        for (i = 0; i < leftOrder.length; i++) drawSkillOrb(30 + i * 56, 108, left, leftOrder[i]);
+        if (!(mobileMode && humanControls(left))) for (i = 0; i < leftOrder.length; i++) drawSkillOrb(30 + i * 56, 108, left, leftOrder[i]);
 
         drawPortrait(W - 278, 42, right);
         ctx.textAlign = "right";
@@ -5879,7 +5933,7 @@
         ctx.fillStyle = "#f4efe6";
         ctx.fillText((((gameMode === "ai" || gameMode === "practice") && playerSide === "R") ? "你 · " : ((gameMode === "ai" || gameMode === "practice") ? "AI · " : "")) + right.name, W - 16, 18);
         drawResourceBars(W - 16, 26, 230, right, true);
-        for (i = 0; i < rightOrder.length; i++) drawSkillOrb(W - 30 - (rightOrder.length - 1 - i) * 56, 108, right, rightOrder[i]);
+        if (!(mobileMode && humanControls(right))) for (i = 0; i < rightOrder.length; i++) drawSkillOrb(W - 30 - (rightOrder.length - 1 - i) * 56, 108, right, rightOrder[i]);
       }
 
       drawPauseButton(34, H - 36);
@@ -5907,7 +5961,7 @@
       addHit(24, H - 52, 92, 30, function () { hudHidden = false; });
     }
     if (gameMode === "practice") drawPracticePanel();
-    if (matchState === "fight" || matchState === "countdown" || matchState === "roundEnd") drawSticks();
+    if (matchState === "fight" || matchState === "countdown" || matchState === "roundEnd") { drawSticks(); if (mobileMode && !hudHidden) drawMobileSkillArc(); }
 
     if (matchState === "countdown") {
       ctx.textAlign = "center";
@@ -6250,9 +6304,34 @@
     { id: "R", cx: W - 86, cy: H - 176, r: 58, dx: 0, dy: 0, nx: 0, ny: 0, pid: null }
   ];
 
+  function drawMobileSkillArc() {
+    var f = humanFighter();
+    var order = (f.id === "L") ? leftOrder : rightOrder;
+    if (!order || !order.length) return;
+    var ox = W - 92, oy = H - 92;
+    var rest = order.slice(1);
+    var inner = rest.slice(0, 3), outer = rest.slice(3);
+    function ring(list, R, r) {
+      var n = list.length, j;
+      for (j = 0; j < n; j++) {
+        var a = n === 1 ? Math.PI * 1.25 : Math.PI + 0.12 + (Math.PI / 2 - 0.24) * j / (n - 1);
+        drawSkillOrb(ox + Math.cos(a) * R, oy + Math.sin(a) * R, f, list[j], r);
+      }
+    }
+    ring(inner, 150, 38);
+    ring(outer, 250, 38);
+    drawSkillOrb(ox, oy, f, order[0], 56);
+  }
+
+  function layoutSticks() {
+    if (mobileMode) { sticks[0].cx = 150; sticks[0].cy = H - 200; sticks[0].r = 84; }
+    else { sticks[0].cx = 86; sticks[0].cy = H - 176; sticks[0].r = 58; }
+  }
+
   function drawSticks() {
     var i;
-    for (i = 0; i < sticks.length; i++) {
+    layoutSticks();
+    for (i = 0; i < (mobileMode ? 1 : sticks.length); i++) {
       var s = sticks[i];
       ctx.beginPath();
       ctx.arc(s.cx, s.cy, s.r, 0, Math.PI * 2);
@@ -6277,7 +6356,8 @@
 
   function stickAt(x, y) {
     var i;
-    for (i = 0; i < sticks.length; i++) {
+    layoutSticks();
+    for (i = 0; i < (mobileMode ? 1 : sticks.length); i++) {
       var s = sticks[i];
       if (planarDist(x, y, s.cx, s.cy) <= s.r) return s;
     }
@@ -6288,7 +6368,7 @@
     var dx = x - s.cx;
     var dy = y - s.cy;
     var dist = Math.sqrt(dx * dx + dy * dy);
-    var max = s.r - 22;
+    var max = s.r - 26;
     if (dist > max && dist > 0) {
       dx = dx / dist * max;
       dy = dy / dist * max;
@@ -6342,7 +6422,11 @@
     aimStick(s, pt.x, pt.y);
   }, { passive: false });
 
-  canvas.addEventListener("pointerup", function (e) { releaseStick(e.pointerId); });
+  canvas.addEventListener("pointerup", function (e) {
+    releaseStick(e.pointerId);
+    var hf = (gameMode === "ai" || gameMode === "practice") ? humanFighter() : null;
+    if (hf && hf.shieldTouch) { hf.shieldTouch = false; shieldPressUp(hf); }
+  });
   canvas.addEventListener("pointercancel", function (e) { releaseStick(e.pointerId); });
 
   function canvasPoint(e) {
@@ -6408,6 +6492,7 @@
   window.__DUEL_DEBUG__ = function () {
     return {
       matchState: matchState,
+      mobileMode: mobileMode,
       gameMode: gameMode,
       countdownPhase: countdownPhase,
       countLeft: countLeft,
