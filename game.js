@@ -70,7 +70,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
-  var ASSET_V = "pages30j";
+  var ASSET_V = "pages30k";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 8;
@@ -2133,14 +2133,16 @@
         });
       }
     } else if (id === "summon_panda") {
-      // pages30j: 熊猫从上垂直落下，落地砸一下后消失
+      // pages30k: 熊猫从上垂直落下，落地砸一下后消失；施放者获 4s 霸体
       var landX = f.x + f.facing * 130;
       var landY = f.y - 40;
       if (opp && opp.hp > 0) {
         landX = opp.x;
         landY = opp.y - 40;
       }
+      f.hyperArmor = Math.max(f.hyperArmor || 0, 4);
       spawnFloater(f.x, f.y - 190, "通灵·熊猫", color);
+      spawnFloater(f.x, f.y - 210, "霸体 4s", "#e07030");
       projectiles.push({
         kind: "panda_drop",
         x: landX,
