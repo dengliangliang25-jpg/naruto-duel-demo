@@ -70,7 +70,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
-  var ASSET_V = "pages30e";
+  var ASSET_V = "pages30f";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 8;
@@ -2174,9 +2174,9 @@
     var dir = f.facing < 0 ? -1 : 1;
     f.anim = "breath";
     f.animT = 0;
-    // 32 frames at ~20fps ≈ 1.6s; hold breath pose for the full VFX.
-    f.animDur = 1.6;
-    f.busy = 1.45;
+    // pages30f: 32 frames at ~40fps ≈ 0.8s (playback 2x / duration half).
+    f.animDur = 0.8;
+    f.busy = 0.72;
     f.hitPending = false;
     projectiles.push({
       kind: "firebreath",
@@ -2188,9 +2188,9 @@
       dmg: boosted(f, 15),
       owner: f.id,
       facing: f.facing,
-      life: 1.6,
+      life: 0.8,
       age: 0,
-      fps: 20,
+      fps: 40,
       drawScale: 1.1,
       hit: false,
       tickAcc: 0
@@ -3190,7 +3190,7 @@
         p.x = ownerFb.x + dirFb * FIREBREATH_MOUTH_OX;
         p.y = ownerFb.y + FIREBREATH_MOUTH_OY;
         var targetFb = projectileFoe(p.owner, p.x + dirFb * 200, p.y);
-        var prog = p.age / 1.6;
+        var prog = p.age / 0.8;
         if (prog > 1) prog = 1;
         // Reach grows as the stream extends; scaled to half with the smaller VFX.
         var reach = 110 + 350 * Math.min(1, prog / 0.35);
