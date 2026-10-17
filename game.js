@@ -70,7 +70,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
-  var ASSET_V = "pages30y";
+  var ASSET_V = "pages30z";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [], ichigo: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 8;
@@ -696,11 +696,11 @@
   var luffyBodyW = 145 * luffyScale;
   var luffyBodyH = 436 * luffyScale;
 
-  // pages30y: 一护基础 — idle/run/knock；hitstun 暂用 idle 顶（土豪打回受击帧）
+  // pages30z: 一护基础 — idle/run/hitstun/knock（hitstun 换真帧）
   var ichigo = {
     idle: loadNumbered("ichigo/idle", 8),
     run: loadNumbered("ichigo/run", 8),
-    hitstun: loadNumbered("ichigo/idle", 6),
+    hitstun: loadNumbered("ichigo/hitstun", 6),
     knock: loadNumbered("ichigo/knockdown", 6)
   };
   // canvas 320×436；opaque ~307×378；脚底距底 ~8px；面朝右 → nativeDir +1
@@ -5291,7 +5291,6 @@
       else if (kdt < 0.18) idx = 4;
       else idx = 5;
     } else if (f.hitLight && (f.stun || 0) > 0 && ichigo.hitstun && ichigo.hitstun[0] && ichigo.hitstun[0].complete) {
-      // pages30y: hitstun 暂顶 idle（同 idle 路径）
       set = ichigo.hitstun;
       var su = 1 - Math.min(1, (f.stun || 0) / 0.55);
       idx = Math.min(5, Math.floor(su * 6));
