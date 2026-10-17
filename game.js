@@ -70,7 +70,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
-  var ASSET_V = "pages30w";
+  var ASSET_V = "pages30x";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 8;
@@ -2467,8 +2467,7 @@
     f.armor = Math.max(f.armor || 0, 0.3);
     f.hitPending = false;
     f.gear2 = true;
-    // pages30w: 进二档查克拉减半；不设 chakraLock，否则会每帧灌满蓝、drain 永不跑
-    f.chakra = Math.max(0, Math.floor((f.chakra || 0) * 0.5));
+    // pages30x: 减半只由 tryCast 的 cost=floor(chakra*0.5) 做一次；此处不再二次减半
     f.moveSpeed = (f.baseMoveSpeed || 500) * 1.25;
     spawnFloater(f.x, f.y - 190, "二档", "#ff6040");
   }
