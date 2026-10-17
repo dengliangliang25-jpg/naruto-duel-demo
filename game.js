@@ -70,8 +70,8 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
-  var ASSET_V = "pages30s";
-  var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [] };
+  var ASSET_V = "pages30t";
+  var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 8;
   var MAX_TRIES = 10;
@@ -407,6 +407,8 @@
       bindArr(gojo.idle); bindArr(gojo.run); bindArr(gojo.hitstun); bindArr(gojo.knock);
       bindArr(gojo.atk); bindArr(gojo.blue); bindArr(gojo.red); bindArr(gojo.blink);
       bindArr(gojo.infinity); bindArr(gojo.infinityLoop); bindArr(gojo.domain);
+    } else if (kitId === "luffy") {
+      bindArr(luffy.idle); bindArr(luffy.run); bindArr(luffy.hitstun); bindArr(luffy.knock);
     }
   }
   function registerKitSheets(kitId) {
@@ -426,7 +428,7 @@
 
   var cardImgs = {};
   (function loadCards() {
-    var ids = ["obito", "pain", "tanjiro", "gojo", "lockA", "lockB", "lockC"];
+    var ids = ["obito", "pain", "tanjiro", "gojo", "luffy", "lockB", "lockC"];
     var i;
     for (i = 0; i < ids.length; i++) {
       var img = regImg(new Image(), "cards/" + ids[i] + ".png", "core", "core");
@@ -500,7 +502,7 @@
     { id: "pain", name: "佩恩天道", unlocked: true, blurb: "黑棒 · 气盾 · 吸引" },
     { id: "tanjiro", name: "炭治郎", unlocked: true, blurb: "水之呼吸 · 火之形态" },
     { id: "gojo", name: "五条悟", unlocked: true, blurb: "无下限 · 苍 · 赫 · 领域" },
-    { id: "lockA", name: "影", unlocked: false, blurb: "即将开放" },
+    { id: "luffy", name: "路飞", unlocked: true, blurb: "橡胶 · 二档 · 金刚枪" },
     { id: "lockB", name: "焰", unlocked: false, blurb: "即将开放" },
     { id: "lockC", name: "岚", unlocked: false, blurb: "即将开放" }
   ];
@@ -542,7 +544,7 @@
   };
   var portraitImgs = {};
   (function loadPortraits() {
-    var ids = ["obito", "pain", "tanjiro", "gojo"];
+    var ids = ["obito", "pain", "tanjiro", "gojo", "luffy"];
     var i;
     for (i = 0; i < ids.length; i++) {
       var img = regImg(new Image(), "portraits/" + ids[i] + ".png", "core", "core");
@@ -668,6 +670,19 @@
   var gojoScale = (180 * obitoScale) / 390;
   var gojoBodyW = 145 * gojoScale;
   var gojoBodyH = 390 * gojoScale;
+
+  // pages30t: 路飞基础帧 idle/run/hitstun/knock；技能帧后补，先桩
+  var luffy = {
+    idle: loadNumbered("luffy/idle", 8),
+    run: loadNumbered("luffy/run", 8),
+    hitstun: loadNumbered("luffy/hitstun", 6),
+    knock: loadNumbered("luffy/knockdown", 6)
+  };
+  // canvas 320×436；面朝右 → nativeDir +1
+  var luffyFootPad = 8;
+  var luffyScale = (180 * obitoScale) / 436;
+  var luffyBodyW = 145 * luffyScale;
+  var luffyBodyH = 436 * luffyScale;
 
   var clothFps = 9;
   function plantCaster(f) {
@@ -904,6 +919,21 @@
         infinity: { key: "C", name: "无下限", role: "灵体", cd: 0, max: 7.8, cost: 30 },
         domain: { key: "V", name: "领域", role: "绝技", cd: 0, max: 20, cost: 0 }
       }
+    },
+    luffy: {
+      name: "路飞",
+      weapon: "blade",
+      speed: 500,
+      palette: { body: "#c4282d", trim: "#f5d76e", glow: "#ff6b4a", deep: "#3a1014", hot: "#ff9040" },
+      order: ["atk", "gatling", "pistol", "balloon", "gear2", "spear"],
+      skills: {
+        atk: { key: "Q", name: "橡胶拳", role: "平A", cd: 0, max: 0.4, cost: 0 },
+        gatling: { key: "E", name: "机关枪", role: "连击", cd: 0, max: 6, cost: 20 },
+        pistol: { key: "R", name: "橡胶枪", role: "突进", cd: 0, max: 1.5, cost: 16 },
+        balloon: { key: "F", name: "气球", role: "防御", cd: 0, max: 8, cost: 25 },
+        gear2: { key: "C", name: "二档", role: "变身", cd: 0, max: 20, cost: 0 },
+        spear: { key: "V", name: "金刚枪", role: "大招", cd: 0, max: 0, cost: 0 }
+      }
     }
   };
 
@@ -959,6 +989,7 @@
     f.ult2T = 0;
     f.ult2Hits = 0;
     f.domainT = 0;
+    f.gear2 = false;
   }
 
   // pages20: fixed slots on both sides. Non-scroll skills fill slots 0..5 in order;
@@ -1063,6 +1094,7 @@
   function isPain(f) { return f && f.kit === "pain"; }
   function isTanjiro(f) { return f && f.kit === "tanjiro"; }
   function isGojo(f) { return f && f.kit === "gojo"; }
+  function isLuffy(f) { return f && f.kit === "luffy"; }
 
   function isCoop() { return gameMode === "coop"; }
 
@@ -1275,6 +1307,9 @@
     f.ult2Phase = 0;
     f.ult2T = 0;
     f.ult2Hits = 0;
+    f.domainT = 0;
+    f.gear2 = false;
+    f.balloonT = 0;
     if (f.baseMoveSpeed) f.moveSpeed = f.baseMoveSpeed;
   }
 
@@ -1876,10 +1911,19 @@
       }
       return;
     }
+    if (id === "spear" && !(isLuffy(f) && f.gear2)) {
+      if (humanControls(f) && performance.now() - (f.needGearHintAt || 0) > 600) {
+        f.needGearHintAt = performance.now();
+        spawnFloater(f.x, f.y - 190, "需二档（先按" + ((f.skills.gear2 && f.skills.gear2.key) || "C") + "）", "#ffb070");
+      }
+      return;
+    }
     if (id === "ult1" && isTanjiro(f) && f.fireForm) return;
+    if (id === "gear2" && isLuffy(f) && f.gear2) return;
     var cost = sk.cost || 0;
     if (id === "ult1" && isTanjiro(f)) cost = Math.floor((f.chakra || 0) * 0.5);
     if (id === "domain" && isGojo(f)) cost = Math.floor((f.chakra || 0) * 0.5);
+    if (id === "gear2" && isLuffy(f)) cost = Math.floor((f.chakra || 0) * 0.5);
     if ((f.chakra || 0) < cost) return;
     // Using any other Obito skill during 虚化 drops out of it right away.
     if (isObito(f) && f.phase > 0 && id !== "phase") endPhase(f);
@@ -1924,6 +1968,7 @@
     else if (id === "pull") castPull(f);
     else if (id === "atk") {
       if (isGojo(f)) castGojoAtk(f);
+      else if (isLuffy(f)) castLuffyAtk(f);
       else castTanjiroAtk(f);
     }
     else if (id === "water2") castTanjiroWater2(f);
@@ -1935,6 +1980,11 @@
     else if (id === "red") castGojoRed(f);
     else if (id === "blink") castGojoBlink(f);
     else if (id === "domain") castGojoDomain(f);
+    else if (id === "gatling") castLuffyGatling(f);
+    else if (id === "pistol") castLuffyPistol(f);
+    else if (id === "balloon") castLuffyBalloon(f);
+    else if (id === "gear2") castLuffyGear2(f);
+    else if (id === "spear") castLuffySpear(f);
     else if (isTongLingId(id)) castScroll(f, id);
   }
 
@@ -2338,6 +2388,102 @@
     f.chakraLock = Math.max(f.chakraLock || 0, 4);
     spawnFloater(f.x, f.y - 190, "领域展开", "#c080ff");
     rings.push({ x: f.x, y: f.y - 40, life: 0.8, max: 0.8, color: "rgba(160,80,255,0.7)", r0: 40, r1: 350 });
+  }
+
+  // pages30t: 路飞技能桩（专属帧未到前用 idle + 简易效果）
+  function castLuffyAtk(f) {
+    f.anim = "l_atk";
+    f.animT = 0;
+    f.animDur = 0.4;
+    f.busy = 0.36;
+    f.hitPending = true;
+    f.hitAt = 0.12;
+    f.meleeDmg = boosted(f, f.gear2 ? 18 : 12);
+    f.meleeRange = luffyBodyW * 1.4;
+    f.meleeLaunch = false;
+    rings.push({ x: f.x + f.facing * luffyBodyW * 0.5, y: f.y - luffyBodyH * 0.45, life: 0.28, max: 0.28, color: "rgba(255,120,80,0.7)", r0: 10, r1: luffyBodyW * 0.75 });
+  }
+  function castLuffyGatling(f) {
+    f.anim = "l_gatling";
+    f.animT = 0;
+    f.animDur = 0.9;
+    f.busy = 0.9;
+    f.hyperArmor = Math.max(f.hyperArmor || 0, 0.9);
+    f.hitPending = true;
+    f.hitAt = 0.2;
+    f.hitPending2 = true;
+    f.hitAt2 = 0.55;
+    f.meleeDmg = boosted(f, f.gear2 ? 14 : 9);
+    f.meleeRange = luffyBodyW * 1.5;
+    f.meleeLaunch = false;
+    rings.push({ x: f.x + f.facing * luffyBodyW * 0.55, y: f.y - luffyBodyH * 0.42, life: 0.85, max: 0.85, color: "rgba(255,160,60,0.55)", r0: 16, r1: luffyBodyW * 1.1 });
+  }
+  function castLuffyPistol(f) {
+    f.anim = "l_pistol";
+    f.animT = 0;
+    f.animDur = 0.35;
+    f.busy = 0.35;
+    f.armor = Math.max(f.armor || 0, 0.25);
+    f.hitPending = true;
+    f.hitAt = 0.18;
+    f.meleeDmg = boosted(f, f.gear2 ? 20 : 14);
+    f.meleeRange = luffyBodyW * 1.6;
+    f.meleeLaunch = false;
+    ghosts.push({
+      x: f.x, y: f.y, facing: f.facing, life: 0.25, max: 0.25,
+      palette: f.palette, weapon: f.weapon, owner: f.id, kit: f.kit
+    });
+    var spot = clampSpot(f.x + f.facing * 200, f.y);
+    spot.x = clamp(spot.x, 175, W - 175);
+    f.x = spot.x;
+    f.y = spot.y;
+  }
+  function castLuffyBalloon(f) {
+    f.anim = "l_balloon";
+    f.animT = 0;
+    f.animDur = 1.2;
+    f.busy = 1.2;
+    f.hitPending = false;
+    f.armor = Math.max(f.armor || 0, 1.2);
+    f.balloonT = 1.2;
+    spawnFloater(f.x, f.y - 170, "气球", "#ffd070");
+    rings.push({ x: f.x, y: f.y - luffyBodyH * 0.4, life: 1.1, max: 1.1, color: "rgba(255,200,120,0.45)", r0: 20, r1: luffyBodyW * 1.4 });
+  }
+  function castLuffyGear2(f) {
+    f.anim = "l_gear2";
+    f.animT = 0;
+    f.animDur = 0.4;
+    f.busy = 0.4;
+    f.armor = Math.max(f.armor || 0, 0.3);
+    f.hitPending = false;
+    f.gear2 = true;
+    f.chakra = Math.max(0, Math.floor((f.chakra || 0) * 0.5));
+    f.chakraLock = Math.max(f.chakraLock || 0, 999);
+    f.moveSpeed = (f.baseMoveSpeed || 500) * 1.25;
+    spawnFloater(f.x, f.y - 190, "二档", "#ff6040");
+  }
+  function exitLuffyGear2(f) {
+    if (!f.gear2) return;
+    f.gear2 = false;
+    f.chakraLock = 0;
+    f.moveSpeed = f.baseMoveSpeed || 500;
+    spawnFloater(f.x, f.y - 160, "二档结束", "#c08070");
+  }
+  function castLuffySpear(f) {
+    f.anim = "l_spear";
+    f.animT = 0;
+    f.animDur = 0.7;
+    f.busy = 0.7;
+    f.hyperArmor = Math.max(f.hyperArmor || 0, 0.7);
+    f.hitPending = true;
+    f.hitAt = 0.35;
+    f.meleeDmg = boosted(f, 36);
+    f.meleeRange = 400;
+    f.meleeLaunch = true;
+    f.chakra = 0;
+    exitLuffyGear2(f);
+    spawnFloater(f.x, f.y - 190, "金刚枪", "#ffe7a0");
+    rings.push({ x: f.x + f.facing * 120, y: f.y - luffyBodyH * 0.45, life: 0.5, max: 0.5, color: "rgba(255,220,120,0.7)", r0: 12, r1: 90 });
   }
 
     function beginMelee(f, anim, dur, hitAt, hitAt2) {
@@ -2827,6 +2973,9 @@
     } else if (f.anim === "t_atk" || f.anim === "t_counter") {
       var rng = f.meleeRange || (tanjiroBodyW * 1.4);
       if (inFront && dist < rng) hurt(opp, f.meleeDmg || 12, f.palette.glow, { attacker: f });
+    } else if (f.anim === "g_atk" || f.anim === "l_atk" || f.anim === "l_gatling" || f.anim === "l_pistol" || f.anim === "l_spear") {
+      var rngL = f.meleeRange || (luffyBodyW * 1.4);
+      if (inFront && dist < rngL) hurt(opp, f.meleeDmg || 12, f.palette.glow, { attacker: f, launch: !!f.meleeLaunch });
     }
   }
 
@@ -2983,6 +3132,35 @@
         tryCast(f, f.scrollId);
         return;
       }
+    } else if (isLuffy(f)) {
+      if (f.gear2 && f.skills.spear && Math.random() < 0.14) {
+        tryCast(f, "spear");
+        return;
+      }
+      if (!f.gear2 && dist < 220 && f.skills.gear2 && f.skills.gear2.cd <= 0 && f.chakra > 40 && Math.random() < 0.05) {
+        tryCast(f, "gear2");
+        return;
+      }
+      if (dist < 130 && f.skills.atk && f.skills.atk.cd <= 0) {
+        tryCast(f, "atk");
+        return;
+      }
+      if (dist < 180 && f.skills.gatling && f.skills.gatling.cd <= 0 && f.chakra >= 20 && Math.random() < 0.16) {
+        tryCast(f, "gatling");
+        return;
+      }
+      if (dist > 100 && dist < 360 && f.skills.pistol && f.skills.pistol.cd <= 0 && f.chakra >= 16 && Math.random() < 0.16) {
+        tryCast(f, "pistol");
+        return;
+      }
+      if (dist < 150 && f.skills.balloon && f.skills.balloon.cd <= 0 && f.chakra >= 25 && Math.random() < 0.06) {
+        tryCast(f, "balloon");
+        return;
+      }
+      if (f.scrollId && f.skills[f.scrollId] && f.skills[f.scrollId].cd <= 0 && f.chakra >= (f.skills[f.scrollId].cost || 0) && Math.random() < 0.05) {
+        tryCast(f, f.scrollId);
+        return;
+      }
     } else if (isTanjiro(f)) {
       if (f.fireForm && f.skills.ult2 && Math.random() < 0.16) {
         tryCast(f, "ult2");
@@ -3105,6 +3283,9 @@
       if (f.chakraLock > 0) {
         f.chakraLock = Math.max(0, f.chakraLock - dt);
         f.chakra = f.maxChakra;
+      } else if (isLuffy(f) && f.gear2) {
+        f.chakra = Math.max(0, (f.chakra || 0) - 8 * dt);
+        if (f.chakra <= 0) exitLuffyGear2(f);
       } else if (isTanjiro(f) && f.fireForm) {
         f.chakra = Math.max(0, f.chakra - 8 * dt);
         if (f.chakra <= 0) exitFireForm(f);
@@ -3124,6 +3305,7 @@
       }
       if (isGojo(f) && (f.domainT || 0) > 0) {
         f.domainT = Math.max(0, f.domainT - dt);
+      if ((f.balloonT || 0) > 0) f.balloonT = Math.max(0, f.balloonT - dt);
         if (f.domainT > 0) {
           var foesD = activeFighters(), di;
           for (di = 0; di < foesD.length; di++) {
@@ -3255,6 +3437,7 @@
       if (isPain(f) && (f.busy > 0 || f.anim === "combo" || f.anim === "kick" || f.anim === "rod" || f.anim === "push" || f.anim === "back" || f.anim === "pull" || f.anim === "cast")) plantCaster(f);
       if (isTanjiro(f) && (f.busy > 0 || (f.ult2Phase || 0) > 0 || (f.counterT || 0) > 0 || f.anim.indexOf("t_") === 0)) plantCaster(f);
       if (isGojo(f) && (f.busy > 0 || (f.anim && f.anim.indexOf("g_") === 0))) plantCaster(f);
+      if (isLuffy(f) && (f.busy > 0 || (f.anim && f.anim.indexOf("l_") === 0))) plantCaster(f);
       if (isAirborne(f)) {
         f.dashT = 0;
         f.gait = "idle";
@@ -4166,7 +4349,7 @@
   }
 
   function drawGroundShadow(f) {
-    var body = isObito(f) ? obitoScale : (isTanjiro(f) ? tanjiroScale * 1.15 : (isGojo(f) ? gojoScale * 1.1 : painScale));
+    var body = isObito(f) ? obitoScale : (isTanjiro(f) ? tanjiroScale * 1.15 : (isGojo(f) ? gojoScale * 1.1 : (isLuffy(f) ? luffyScale * 1.1 : painScale)));
     var lunging = f.anim === "punch" || f.anim === "tele" || f.anim === "breath" || f.anim === "thrust" || f.anim === "cleave" || f.anim === "slash" || f.anim === "dash" || f.anim === "swap" || f.anim === "combo" || f.anim === "kick" || f.anim === "rod" || f.anim === "push" || f.anim === "back" || (f.anim && f.anim.indexOf("t_") === 0);
     var rx = 32;
     var ry = 9;
@@ -4729,6 +4912,101 @@
     drawGojoAt(f.x, f.y - drawAir, drawFacing, set, idx, alpha, tiltUse, f.hitShake || 0);
   }
 
+  function luffyImage(set, index) {
+    if (!set || !set.length) return null;
+    var i = index % set.length;
+    if (i < 0) i += set.length;
+    var img = set[i];
+    if (!img || !img.complete || !img.naturalWidth) return null;
+    return img;
+  }
+  // pages30t: luffy art faces RIGHT → nativeDir +1
+  function luffyNativeDir(set) {
+    return 1;
+  }
+  function drawLuffyAt(x, groundY, facing, set, index, alpha, tilt, shakeAmp) {
+    var img = luffyImage(set, index);
+    if (!img) return;
+    var sc = luffyScale;
+    var sx = 0;
+    var sy = 0;
+    if (shakeAmp && shakeAmp > 0) {
+      sx = (Math.random() * 2 - 1) * shakeAmp * 5;
+      sy = (Math.random() * 2 - 1) * shakeAmp * 2.5;
+      sc = sc * (1 - Math.min(0.08, shakeAmp * 0.35));
+    }
+    var dw = img.width * sc;
+    var dh = img.height * sc;
+    var y = groundY + 2 + luffyFootPad * sc;
+    ctx.save();
+    ctx.translate(x + sx, y + sy);
+    if (tilt) ctx.rotate(tilt);
+    var nativeDir = luffyNativeDir(set);
+    ctx.scale((facing < 0 ? -1 : 1) * nativeDir, 1);
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(img, -dw / 2, -dh, dw, dh);
+    ctx.restore();
+  }
+  function drawLuffy(f) {
+    var set = luffy.idle;
+    var idx = 0;
+    var alpha = 1;
+    var reacting = isAirborne(f) || isDowned(f) || ((f.stun || 0) > 0 && f.hitLight);
+    var drawFacing = f.facing;
+    if (reacting && (f.hitLeanDir || 0)) {
+      drawFacing = (f.hitLeanDir > 0) ? -1 : 1;
+    }
+    if ((f.knockPhase === "air" || isAirborne(f)) && luffy.knock && luffy.knock[0] && luffy.knock[0].complete) {
+      set = luffy.knock;
+      var kat = f.knockT || 0;
+      if (kat < 0.08) idx = 0;
+      else if (kat < 0.22) idx = 1;
+      else if (kat < 0.40) idx = 2;
+      else idx = 3;
+    } else if ((f.knockPhase === "down" || isDowned(f)) && luffy.knock && luffy.knock[0] && luffy.knock[0].complete) {
+      set = luffy.knock;
+      var kdt = f.knockT || 0;
+      if ((f.getUpT || 0) > 0) idx = 5;
+      else if (kdt < 0.18) idx = 4;
+      else idx = 5;
+    } else if (f.hitLight && (f.stun || 0) > 0 && luffy.hitstun && luffy.hitstun[0] && luffy.hitstun[0].complete) {
+      set = luffy.hitstun;
+      var su = 1 - Math.min(1, (f.stun || 0) / 0.55);
+      idx = Math.min(5, Math.floor(su * 6));
+    } else if (reacting) {
+      set = luffy.idle;
+      idx = 0;
+    } else if (f.anim && f.anim.indexOf("l_") === 0) {
+      // 技能帧未到：idle 顶技能动作
+      set = luffy.idle;
+      idx = Math.min(7, Math.floor(((f.animT || 0) / Math.max(0.01, f.animDur || 0.4)) * 8));
+    } else if (f.gait === "run" || f.gait === "walk") {
+      set = (luffy.run && luffy.run[0] && luffy.run[0].complete) ? luffy.run : luffy.idle;
+      idx = Math.floor(time * 10) % 8;
+    } else {
+      set = luffy.idle;
+      idx = Math.floor(time * 8) % 8;
+    }
+    if (f.invuln > 0 && !isDowned(f) && !isAirborne(f) && Math.sin(time * 40) > 0) alpha *= 0.45;
+    if (f.gear2) alpha = Math.min(1, alpha * 1.05);
+    var drawAir = (f.airH || 0);
+    if (f.busy > 0 || (f.anim && f.anim.indexOf("l_") === 0)) drawAir = 0;
+    var tiltUse = (set === luffy.hitstun || set === luffy.knock) ? 0 : fighterDrawTilt(f);
+    drawLuffyAt(f.x, f.y - drawAir, drawFacing, set, idx, alpha, tiltUse, f.hitShake || 0);
+    if (f.gear2) {
+      var pulse = 0.55 + 0.45 * Math.sin(time * 10);
+      ctx.save();
+      ctx.translate(f.x, f.y - luffyBodyH * 0.45);
+      ctx.globalAlpha = 0.12 + 0.1 * pulse;
+      ctx.strokeStyle = "#ff8040";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, luffyBodyW * 0.9, luffyBodyH * 0.55, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
   function drawFighter(f) {
     drawGroundShadow(f);
     drawHyperArmorAura(f);
@@ -4742,6 +5020,10 @@
     }
     if (isGojo(f)) {
       drawGojo(f);
+      return;
+    }
+    if (isLuffy(f)) {
+      drawLuffy(f);
       return;
     }
     drawPain(f);
@@ -4782,6 +5064,10 @@
     }
     if (g.kit === "gojo") {
       drawGojoAt(g.x, g.y, g.facing, gojo.idle, 0, a, 0, 0);
+      return;
+    }
+    if (g.kit === "luffy") {
+      drawLuffyAt(g.x, g.y, g.facing, luffy.idle, 0, a, 0, 0);
       return;
     }
     if (g.kit === "pain" || (!g.kit && g.owner === "R")) {
@@ -5467,7 +5753,7 @@
       ctx.lineTo(-4, -2);
       ctx.closePath();
       ctx.fill();
-    } else if (id === "ult2") {
+    } else if (id === "ult2" || id === "spear") {
       ctx.beginPath();
       ctx.moveTo(-12, -4);
       ctx.lineTo(12, -4);
@@ -5476,6 +5762,43 @@
       ctx.moveTo(-4, -8);
       ctx.lineTo(8, 0);
       ctx.lineTo(-4, 8);
+      ctx.stroke();
+    } else if (id === "gatling") {
+      ctx.beginPath();
+      ctx.moveTo(-10, 8);
+      ctx.lineTo(2, -10);
+      ctx.lineTo(8, -6);
+      ctx.lineTo(-4, 12);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(-4, 6);
+      ctx.lineTo(8, -8);
+      ctx.stroke();
+    } else if (id === "pistol") {
+      ctx.beginPath();
+      ctx.moveTo(-12, 0);
+      ctx.lineTo(12, 0);
+      ctx.moveTo(4, -6);
+      ctx.lineTo(12, 0);
+      ctx.lineTo(4, 6);
+      ctx.stroke();
+    } else if (id === "balloon") {
+      ctx.beginPath();
+      ctx.ellipse(0, -2, 10, 12, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(-3, 10);
+      ctx.lineTo(3, 10);
+      ctx.stroke();
+    } else if (id === "gear2") {
+      ctx.beginPath();
+      ctx.arc(0, 2, 7, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(-8, -8);
+      ctx.lineTo(0, -14);
+      ctx.lineTo(8, -8);
       ctx.stroke();
     }
     ctx.restore();
@@ -5669,6 +5992,12 @@
       ctx.textAlign = fromRight ? "right" : "left";
       ctx.fillText("火之形态", fromRight ? bx + bw : bx, by + ((f.hyperArmor || 0) > 0 ? 36 : 20));
     }
+    if (isLuffy(f) && f.gear2) {
+      ctx.fillStyle = "#ff8040";
+      ctx.font = "bold 12px sans-serif";
+      ctx.textAlign = fromRight ? "right" : "left";
+      ctx.fillText("二档", fromRight ? bx + bw : bx, by + ((f.hyperArmor || 0) > 0 ? 36 : 20));
+    }
     if (isGojo(f) && (f.phase || 0) > 0) {
       ctx.fillStyle = "#a0c8ff";
       ctx.font = "bold 12px sans-serif";
@@ -5703,7 +6032,7 @@
     var sk = f.skills[id];
     var r = rr || 26;
     var big = r > 30;
-    var needFire = id === "ult2" && isTanjiro(f) && !f.fireForm;
+    var needFire = (id === "ult2" && isTanjiro(f) && !f.fireForm) || (id === "spear" && isLuffy(f) && !f.gear2);
     var ready = !paused && matchState === "fight" && sk.cd <= 0 && !needFire && !(id === "spike" && (f.shield > 0 || f.shieldWind > 0)) && (f.chakra || 0) >= (sk.cost || 0);
     ctx.save();
     ctx.beginPath();
@@ -5768,8 +6097,12 @@
       ctx.fill();
       ctx.font = "bold 10px sans-serif";
       ctx.fillStyle = "#ffb070";
-      ctx.fillText("需火之", cx, cy - 2);
-      ctx.fillText("形态", cx, cy + 10);
+      if (id === "spear") {
+        ctx.fillText("需二档", cx, cy + 4);
+      } else {
+        ctx.fillText("需火之", cx, cy - 2);
+        ctx.fillText("形态", cx, cy + 10);
+      }
     }
     if ((id === "space" || id === "dash") && voidSpace) {
       // pages25: 切空间 shows its remaining time on the icon; press again to leave early
@@ -7300,7 +7633,7 @@
           if (loadMode === "match") return;
           ["obito", "pain", "tanjiro"].forEach(function (k) { registerKitSheets(k); });
           loadMode = "prefetch";
-          ensureGroups(["obito", "pain", "tanjiro", "gojo"], "prefetch");
+          ensureGroups(["obito", "pain", "tanjiro", "gojo", "luffy"], "prefetch");
         }, 200);
       })
       .catch(function (e) { if (window.console) console.error("[manifest]", e); });
