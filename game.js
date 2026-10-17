@@ -70,7 +70,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
-  var ASSET_V = "pages30q";
+  var ASSET_V = "pages30r";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 8;
@@ -406,6 +406,7 @@
     } else if (kitId === "gojo") {
       bindArr(gojo.idle); bindArr(gojo.run); bindArr(gojo.hitstun); bindArr(gojo.knock);
       bindArr(gojo.atk); bindArr(gojo.blue); bindArr(gojo.red); bindArr(gojo.blink);
+      bindArr(gojo.infinity); bindArr(gojo.infinityLoop);
     }
   }
   function registerKitSheets(kitId) {
@@ -648,7 +649,7 @@
   var tanjiroBodyW = 211 * tanjiroScale;
   var tanjiroBodyH = 360 * tanjiroScale;
 
-  // pages30q: 五条悟 — 基础帧 + 定稿 run + 普攻/苍/赫/瞬步技能帧
+  // pages30r: 五条悟 — +无下限施放×6 / 持续循环×4
   var gojo = {
     idle: loadNumbered("gojo/idle", 8),
     run: loadNumbered("gojo/run", 8),
@@ -657,7 +658,9 @@
     atk: loadNumbered("gojo/attack", 6),
     blue: loadNumbered("gojo/skill_ao", 6),
     red: loadNumbered("gojo/skill_aka", 6),
-    blink: loadNumbered("gojo/skill_blink", 6)
+    blink: loadNumbered("gojo/skill_blink", 6),
+    infinity: loadNumbered("gojo/skill_infinity", 6),
+    infinityLoop: loadNumbered("gojo/infinity_loop", 4)
   };
   // canvas 320×436；opaque ~145×390；脚底距底 ~7px；面朝右 → nativeDir +1
   var gojoFootPad = 7;
@@ -2312,6 +2315,12 @@
     f.y = spot.y;
   }
   function castGojoInfinity(f) {
+    // pages30r: 施放条 skill_infinity×6，随后 phase 期间播 infinity_loop
+    f.anim = "g_inf";
+    f.animT = 0;
+    f.animDur = 0.4;
+    f.busy = 0.36;
+    f.hitPending = false;
     f.phase = 2.5;
     f.phaseEye = 0;
     phaseSlow = 0.35;
@@ -4686,10 +4695,19 @@
       var uk = f.animDur > 0 ? f.animT / f.animDur : 1;
       if (uk < 0) uk = 0; if (uk > 0.999) uk = 0.999;
       idx = Math.min(5, Math.floor(uk * 6));
+    } else if (f.anim === "g_inf" && gojo.infinity && gojo.infinity[0] && gojo.infinity[0].complete) {
+      set = gojo.infinity;
+      var ui = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (ui < 0) ui = 0; if (ui > 0.999) ui = 0.999;
+      idx = Math.min(5, Math.floor(ui * 6));
     } else if (f.anim && f.anim.indexOf("g_") === 0) {
-      // other skill stubs (无下限/领域) until art lands
+      // other skill stubs (领域) until art lands
       set = gojo.idle;
       idx = Math.min(7, Math.floor(((f.animT || 0) / Math.max(0.01, f.animDur || 0.4)) * 8));
+    } else if (f.phase > 0 && gojo.infinityLoop && gojo.infinityLoop[0] && gojo.infinityLoop[0].complete) {
+      // pages30r: 无下限持续循环（phase 剩余期间）
+      set = gojo.infinityLoop;
+      idx = Math.floor(time * 8) % 4;
     } else if (f.gait === "run" || f.gait === "walk") {
       // pages30n: run = 土豪过审定稿
       set = (gojo.run && gojo.run[0] && gojo.run[0].complete) ? gojo.run : gojo.idle;
