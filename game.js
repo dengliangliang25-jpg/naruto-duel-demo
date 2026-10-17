@@ -70,8 +70,8 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
-  var ASSET_V = "pages30l";
-  var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [] };
+  var ASSET_V = "pages30m";
+  var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 8;
   var MAX_TRIES = 10;
@@ -403,6 +403,8 @@
       bindArr(tanjiro.fire.atk); bindArr(tanjiro.fire.water2); bindArr(tanjiro.fire.water2c);
       bindArr(tanjiro.fire.water4); bindArr(tanjiro.fire.water1);
       bindArr(tanjiro.hitstun); bindArr(tanjiro.knock);
+    } else if (kitId === "gojo") {
+      bindArr(gojo.idle); bindArr(gojo.run); bindArr(gojo.hitstun); bindArr(gojo.knock);
     }
   }
   function registerKitSheets(kitId) {
@@ -422,7 +424,7 @@
 
   var cardImgs = {};
   (function loadCards() {
-    var ids = ["obito", "pain", "tanjiro", "lockA", "lockB", "lockC"];
+    var ids = ["obito", "pain", "tanjiro", "gojo", "lockA", "lockB", "lockC"];
     var i;
     for (i = 0; i < ids.length; i++) {
       var img = regImg(new Image(), "cards/" + ids[i] + ".png", "core", "core");
@@ -495,6 +497,7 @@
     { id: "obito", name: "带土", unlocked: true, blurb: "虚化 · 喷火 · 空间" },
     { id: "pain", name: "佩恩天道", unlocked: true, blurb: "黑棒 · 气盾 · 吸引" },
     { id: "tanjiro", name: "炭治郎", unlocked: true, blurb: "水之呼吸 · 火之形态" },
+    { id: "gojo", name: "五条悟", unlocked: true, blurb: "无下限 · 苍 · 赫 · 领域" },
     { id: "lockA", name: "影", unlocked: false, blurb: "即将开放" },
     { id: "lockB", name: "焰", unlocked: false, blurb: "即将开放" },
     { id: "lockC", name: "岚", unlocked: false, blurb: "即将开放" }
@@ -537,7 +540,7 @@
   };
   var portraitImgs = {};
   (function loadPortraits() {
-    var ids = ["obito", "pain", "tanjiro"];
+    var ids = ["obito", "pain", "tanjiro", "gojo"];
     var i;
     for (i = 0; i < ids.length; i++) {
       var img = regImg(new Image(), "portraits/" + ids[i] + ".png", "core", "core");
@@ -643,6 +646,19 @@
   var tanjiroFootPad = 20; // empty rows under soles
   var tanjiroBodyW = 211 * tanjiroScale;
   var tanjiroBodyH = 360 * tanjiroScale;
+
+  // pages30m: 五条悟 — 基础帧选角预览；run 暂用 idle 顶（画风未过审）
+  var gojo = {
+    idle: loadNumbered("gojo/idle", 8),
+    run: loadNumbered("gojo/run", 8),
+    hitstun: loadNumbered("gojo/hitstun", 6),
+    knock: loadNumbered("gojo/knockdown", 6)
+  };
+  // canvas 320×436；opaque ~145×390；脚底距底 ~7px；面朝右 → nativeDir +1
+  var gojoFootPad = 7;
+  var gojoScale = (180 * obitoScale) / 390;
+  var gojoBodyW = 145 * gojoScale;
+  var gojoBodyH = 390 * gojoScale;
 
   var clothFps = 9;
   function plantCaster(f) {
@@ -864,6 +880,21 @@
         ult1: { key: "C", name: "火之形态", role: "变身", cd: 0, max: 20, cost: 0 },
         ult2: { key: "V", name: "瞬斩", role: "大招", cd: 0, max: 0, cost: 0 }
       }
+    },
+    gojo: {
+      name: "五条悟",
+      weapon: "blade",
+      speed: 520,
+      palette: { body: "#1a2438", trim: "#e8f0ff", glow: "#6ab0ff", deep: "#0a1020", hot: "#ff4060" },
+      order: ["atk", "blue", "red", "blink", "infinity", "domain"],
+      skills: {
+        atk: { key: "Q", name: "无下限拳", role: "平A", cd: 0, max: 0.4, cost: 0 },
+        blue: { key: "E", name: "苍", role: "吸引", cd: 0, max: 3.4, cost: 18 },
+        red: { key: "R", name: "赫", role: "远程", cd: 0, max: 2.2, cost: 22 },
+        blink: { key: "F", name: "瞬步", role: "突进", cd: 0, max: 1.5, cost: 16 },
+        infinity: { key: "C", name: "无下限", role: "灵体", cd: 0, max: 7.8, cost: 30 },
+        domain: { key: "V", name: "领域", role: "绝技", cd: 0, max: 20, cost: 0 }
+      }
     }
   };
 
@@ -918,6 +949,7 @@
     f.ult2Phase = 0;
     f.ult2T = 0;
     f.ult2Hits = 0;
+    f.domainT = 0;
   }
 
   // pages20: fixed slots on both sides. Non-scroll skills fill slots 0..5 in order;
@@ -1021,6 +1053,7 @@
   function isObito(f) { return f && f.kit === "obito"; }
   function isPain(f) { return f && f.kit === "pain"; }
   function isTanjiro(f) { return f && f.kit === "tanjiro"; }
+  function isGojo(f) { return f && f.kit === "gojo"; }
 
   function isCoop() { return gameMode === "coop"; }
 
@@ -1825,7 +1858,7 @@
     }
     if ((f.stun || 0) > 0 || isAirborne(f)) { bufferCast(f, id); return; }
     if (sk.cd > 0) return;
-    if ((id === "phase" || id === "needle") && f.phase > 0) return;
+    if ((id === "phase" || id === "needle" || id === "infinity") && f.phase > 0) return;
     if (id === "ult2" && !(isTanjiro(f) && f.fireForm)) {
       // pages25: V is fire-form only; say so instead of silently ignoring the key
       if (humanControls(f) && f.anim !== "t_ult2" && performance.now() - (f.ult2At || 0) > 2600 && performance.now() - (f.needFireHintAt || 0) > 600) {
@@ -1837,9 +1870,11 @@
     if (id === "ult1" && isTanjiro(f) && f.fireForm) return;
     var cost = sk.cost || 0;
     if (id === "ult1" && isTanjiro(f)) cost = Math.floor((f.chakra || 0) * 0.5);
+    if (id === "domain" && isGojo(f)) cost = Math.floor((f.chakra || 0) * 0.5);
     if ((f.chakra || 0) < cost) return;
     // Using any other Obito skill during 虚化 drops out of it right away.
     if (isObito(f) && f.phase > 0 && id !== "phase") endPhase(f);
+    if (isGojo(f) && f.phase > 0 && id !== "infinity") endPhase(f);
     if (id === "space" || id === "dash") {
       castSpace(f);
       f.voidEnterAt = performance.now();
@@ -1852,6 +1887,12 @@
     }
     if (id === "phase" || id === "needle") {
       castNeedle(f);
+      f.chakra -= cost;
+      applySkillCd(f, sk, id);
+      return;
+    }
+    if (id === "infinity" && isGojo(f)) {
+      castGojoInfinity(f);
       f.chakra -= cost;
       applySkillCd(f, sk, id);
       return;
@@ -1872,12 +1913,19 @@
     else if (id === "tele" || id === "back") castBackstep(f);
     else if (id === "swap") castRetreat(f);
     else if (id === "pull") castPull(f);
-    else if (id === "atk") castTanjiroAtk(f);
+    else if (id === "atk") {
+      if (isGojo(f)) castGojoAtk(f);
+      else castTanjiroAtk(f);
+    }
     else if (id === "water2") castTanjiroWater2(f);
     else if (id === "water4") castTanjiroWater4(f);
     else if (id === "water1") castTanjiroWater1(f);
     else if (id === "ult1") castTanjiroUlt1(f);
     else if (id === "ult2") castTanjiroUlt2(f);
+    else if (id === "blue") castGojoBlue(f);
+    else if (id === "red") castGojoRed(f);
+    else if (id === "blink") castGojoBlink(f);
+    else if (id === "domain") castGojoDomain(f);
     else if (isTongLingId(id)) castScroll(f, id);
   }
 
@@ -2187,7 +2235,97 @@
     }
   }
 
-  function beginMelee(f, anim, dur, hitAt, hitAt2) {
+  // pages30m: 五条悟技能桩（无专属技能帧前用 idle + 现有效果）
+  function castGojoAtk(f) {
+    f.anim = "g_atk";
+    f.animT = 0;
+    f.animDur = 0.4;
+    f.busy = 0.36;
+    f.hitPending = true;
+    f.hitAt = 0.12;
+    f.meleeDmg = boosted(f, 12);
+    f.meleeRange = gojoBodyW * 1.35;
+    f.meleeLaunch = false;
+    rings.push({ x: f.x + f.facing * gojoBodyW * 0.45, y: f.y - gojoBodyH * 0.45, life: 0.28, max: 0.28, color: "rgba(160,200,255,0.7)", r0: 10, r1: gojoBodyW * 0.7 });
+  }
+  function castGojoBlue(f) {
+    f.anim = "g_blue";
+    f.animT = 0;
+    f.animDur = 0.8;
+    f.busy = 0.8;
+    f.armor = Math.max(f.armor || 0, 0.2);
+    f.hitPending = false;
+    var bx = f.x + f.facing * gojoBodyW * 1.5;
+    var by = f.y - gojoBodyH * 0.45;
+    rings.push({ x: bx, y: by, life: 0.7, max: 0.7, color: "#4080ff", r0: 24, r1: 180 });
+    var foes = activeFighters(), i;
+    for (i = 0; i < foes.length; i++) {
+      var t = foes[i];
+      if (!t || t === f || t.hp <= 0 || t.team === f.team) continue;
+      var dx = t.x - bx, dy = (t.y - gojoBodyH * 0.4) - by;
+      if (dx * dx + dy * dy < 180 * 180) {
+        t.x += (bx - t.x) * 0.55;
+        hurt(t, boosted(f, 10), "#4080ff", { noLaunch: true });
+      }
+    }
+  }
+  function castGojoRed(f) {
+    var dir = f.facing < 0 ? -1 : 1;
+    f.anim = "g_red";
+    f.animT = 0;
+    f.animDur = 0.45;
+    f.busy = 0.4;
+    f.hitPending = false;
+    projectiles.push({
+      kind: "wave",
+      x: f.x + dir * 42,
+      y: f.y - gojoBodyH * 0.5,
+      vx: dir * 640,
+      vy: 0,
+      r: 22,
+      dmg: boosted(f, 18),
+      owner: f.id,
+      life: 0.9,
+      color: "#ff4060"
+    });
+    rings.push({ x: f.x + dir * 50, y: f.y - gojoBodyH * 0.5, life: 0.3, max: 0.3, color: "#ff4060", r0: 8, r1: 48 });
+  }
+  function castGojoBlink(f) {
+    f.anim = "g_blink";
+    f.animT = 0;
+    f.animDur = 0.28;
+    f.busy = 0.28;
+    f.hitPending = false;
+    ghosts.push({
+      x: f.x, y: f.y, facing: f.facing, life: 0.28, max: 0.28,
+      palette: f.palette, weapon: f.weapon, owner: f.id, kit: f.kit
+    });
+    f.invuln = Math.max(f.invuln || 0, 0.15);
+    var spot = clampSpot(f.x + f.facing * 220, f.y);
+    spot.x = clamp(spot.x, 175, W - 175);
+    f.x = spot.x;
+    f.y = spot.y;
+  }
+  function castGojoInfinity(f) {
+    f.phase = 2.5;
+    f.phaseEye = 0;
+    phaseSlow = 0.35;
+    spawnFloater(f.x, f.y - 170, "无下限", "#a0c8ff");
+  }
+  function castGojoDomain(f) {
+    f.anim = "g_domain";
+    f.animT = 0;
+    f.animDur = 0.5;
+    f.busy = 0.5;
+    f.armor = Math.max(f.armor || 0, 0.4);
+    f.hitPending = false;
+    f.domainT = 4;
+    f.chakraLock = Math.max(f.chakraLock || 0, 4);
+    spawnFloater(f.x, f.y - 190, "领域展开", "#c080ff");
+    rings.push({ x: f.x, y: f.y - 40, life: 0.8, max: 0.8, color: "rgba(160,80,255,0.7)", r0: 40, r1: 350 });
+  }
+
+    function beginMelee(f, anim, dur, hitAt, hitAt2) {
     f.anim = anim;
     f.animT = 0;
     f.animDur = dur;
@@ -2801,6 +2939,35 @@
         tryCast(f, "spike");
         return;
       }
+    } else if (isGojo(f)) {
+      if (dist < 130 && f.skills.atk && f.skills.atk.cd <= 0) {
+        tryCast(f, "atk");
+        return;
+      }
+      if (dist > 90 && dist < 420 && f.skills.blue && f.skills.blue.cd <= 0 && f.chakra >= 18 && Math.random() < 0.14) {
+        tryCast(f, "blue");
+        return;
+      }
+      if (dist > 140 && dist < 520 && f.skills.red && f.skills.red.cd <= 0 && f.chakra >= 22 && Math.random() < 0.12) {
+        tryCast(f, "red");
+        return;
+      }
+      if (dist > 100 && dist < 360 && f.skills.blink && f.skills.blink.cd <= 0 && f.chakra >= 16 && Math.random() < 0.16) {
+        tryCast(f, "blink");
+        return;
+      }
+      if (dist < 200 && f.skills.infinity && f.skills.infinity.cd <= 0 && f.chakra >= 30 && f.phase <= 0 && Math.random() < 0.06) {
+        tryCast(f, "infinity");
+        return;
+      }
+      if (f.skills.domain && f.skills.domain.cd <= 0 && Math.random() < 0.05) {
+        tryCast(f, "domain");
+        return;
+      }
+      if (f.scrollId && f.skills[f.scrollId] && f.skills[f.scrollId].cd <= 0 && f.chakra >= (f.skills[f.scrollId].cost || 0) && Math.random() < 0.05) {
+        tryCast(f, f.scrollId);
+        return;
+      }
     } else if (isTanjiro(f)) {
       if (f.fireForm && f.skills.ult2 && Math.random() < 0.16) {
         tryCast(f, "ult2");
@@ -2940,6 +3107,26 @@
         f.counterT = Math.max(0, f.counterT - dt);
         plantCaster(f);
       }
+      if (isGojo(f) && (f.domainT || 0) > 0) {
+        f.domainT = Math.max(0, f.domainT - dt);
+        if (f.domainT > 0) {
+          var foesD = activeFighters(), di;
+          for (di = 0; di < foesD.length; di++) {
+            var td = foesD[di];
+            if (!td || td === f || td.hp <= 0 || td.team === f.team) continue;
+            var ddx = td.x - f.x, ddy = td.y - f.y;
+            if (ddx * ddx + ddy * ddy < 350 * 350) {
+              td.x += (f.x - td.x) * 0.002;
+              if (!td._gojoDomainTick) td._gojoDomainTick = 0;
+              td._gojoDomainTick += dt;
+              if (td._gojoDomainTick >= 0.5) {
+                td._gojoDomainTick = 0;
+                hurt(td, 2, "#c080ff", { noLaunch: true });
+              }
+            }
+          }
+        }
+      }
       if (f.flash > 0) f.flash = Math.max(0, f.flash - dt);
       if (f.invuln > 0) f.invuln = Math.max(0, f.invuln - dt);
       if (f.phase > 0) {
@@ -3052,6 +3239,7 @@
       if (f.pullOn || f.repulseOn || (f.shieldWind || 0) > 0) plantCaster(f);
       if (isPain(f) && (f.busy > 0 || f.anim === "combo" || f.anim === "kick" || f.anim === "rod" || f.anim === "push" || f.anim === "back" || f.anim === "pull" || f.anim === "cast")) plantCaster(f);
       if (isTanjiro(f) && (f.busy > 0 || (f.ult2Phase || 0) > 0 || (f.counterT || 0) > 0 || f.anim.indexOf("t_") === 0)) plantCaster(f);
+      if (isGojo(f) && (f.busy > 0 || (f.anim && f.anim.indexOf("g_") === 0))) plantCaster(f);
       if (isAirborne(f)) {
         f.dashT = 0;
         f.gait = "idle";
@@ -3963,7 +4151,7 @@
   }
 
   function drawGroundShadow(f) {
-    var body = isObito(f) ? obitoScale : (isTanjiro(f) ? tanjiroScale * 1.15 : painScale);
+    var body = isObito(f) ? obitoScale : (isTanjiro(f) ? tanjiroScale * 1.15 : (isGojo(f) ? gojoScale * 1.1 : painScale));
     var lunging = f.anim === "punch" || f.anim === "tele" || f.anim === "breath" || f.anim === "thrust" || f.anim === "cleave" || f.anim === "slash" || f.anim === "dash" || f.anim === "swap" || f.anim === "combo" || f.anim === "kick" || f.anim === "rod" || f.anim === "push" || f.anim === "back" || (f.anim && f.anim.indexOf("t_") === 0);
     var rx = 32;
     var ry = 9;
@@ -4379,6 +4567,120 @@
     ctx.restore();
   }
 
+
+  function gojoImage(set, index) {
+    if (!set || !set.length) return null;
+    var i = index % set.length;
+    if (i < 0) i += set.length;
+    var img = set[i];
+    if (!img || !img.complete || !img.naturalWidth) return null;
+    return img;
+  }
+  // pages30m: gojo art faces RIGHT → nativeDir +1
+  function gojoNativeDir(set) {
+    return 1;
+  }
+  function drawGojoAt(x, groundY, facing, set, index, alpha, tilt, shakeAmp) {
+    var img = gojoImage(set, index);
+    if (!img) return;
+    var sc = gojoScale;
+    var sx = 0;
+    var sy = 0;
+    if (shakeAmp && shakeAmp > 0) {
+      sx = (Math.random() * 2 - 1) * shakeAmp * 5;
+      sy = (Math.random() * 2 - 1) * shakeAmp * 2.5;
+      sc = sc * (1 - Math.min(0.08, shakeAmp * 0.35));
+    }
+    var dw = img.width * sc;
+    var dh = img.height * sc;
+    var y = groundY + 2 + gojoFootPad * sc;
+    ctx.save();
+    ctx.translate(x + sx, y + sy);
+    if (tilt) ctx.rotate(tilt);
+    var nativeDir = gojoNativeDir(set);
+    ctx.scale((facing < 0 ? -1 : 1) * nativeDir, 1);
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(img, -dw / 2, -dh, dw, dh);
+    ctx.restore();
+  }
+  function drawGojoInfinityAura(f) {
+    if (!(f.phase > 0)) return;
+    var pulse = 0.55 + 0.45 * Math.sin(time * 9);
+    ctx.save();
+    ctx.translate(f.x, f.y - gojoBodyH * 0.45);
+    ctx.globalAlpha = 0.18 + 0.12 * pulse;
+    ctx.strokeStyle = "#a0c8ff";
+    ctx.lineWidth = 3;
+    ctx.shadowColor = "#c8e0ff";
+    ctx.shadowBlur = 14;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, gojoBodyW * 0.85, gojoBodyH * 0.55, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+  function drawGojoDomainRing(f) {
+    if (!(f.domainT > 0)) return;
+    var pulse = 0.5 + 0.5 * Math.sin(time * 4);
+    ctx.save();
+    ctx.globalAlpha = 0.14 + 0.08 * pulse;
+    ctx.strokeStyle = "#c080ff";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(f.x, f.y - 20, 350, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+  function drawGojo(f) {
+    drawGojoDomainRing(f);
+    drawGojoInfinityAura(f);
+    var set = gojo.idle;
+    var idx = 0;
+    var alpha = 1;
+    var reacting = isAirborne(f) || isDowned(f) || ((f.stun || 0) > 0 && f.hitLight);
+    var drawFacing = f.facing;
+    if (reacting && (f.hitLeanDir || 0)) {
+      drawFacing = (f.hitLeanDir > 0) ? -1 : 1;
+    }
+    if ((f.knockPhase === "air" || isAirborne(f)) && gojo.knock && gojo.knock[0] && gojo.knock[0].complete) {
+      set = gojo.knock;
+      var kat = f.knockT || 0;
+      if (kat < 0.08) idx = 0;
+      else if (kat < 0.22) idx = 1;
+      else if (kat < 0.40) idx = 2;
+      else idx = 3;
+    } else if ((f.knockPhase === "down" || isDowned(f)) && gojo.knock && gojo.knock[0] && gojo.knock[0].complete) {
+      set = gojo.knock;
+      var kdt = f.knockT || 0;
+      if ((f.getUpT || 0) > 0) idx = 5;
+      else if (kdt < 0.18) idx = 4;
+      else idx = 5;
+    } else if (f.hitLight && (f.stun || 0) > 0 && gojo.hitstun && gojo.hitstun[0] && gojo.hitstun[0].complete) {
+      set = gojo.hitstun;
+      var su = 1 - Math.min(1, (f.stun || 0) / 0.55);
+      idx = Math.min(5, Math.floor(su * 6));
+    } else if (reacting) {
+      set = gojo.idle;
+      idx = 0;
+    } else if (f.anim && f.anim.indexOf("g_") === 0) {
+      // skill stubs: hold idle with slight pulse until skill frames exist
+      set = gojo.idle;
+      idx = Math.min(7, Math.floor(((f.animT || 0) / Math.max(0.01, f.animDur || 0.4)) * 8));
+    } else if (f.gait === "run" || f.gait === "walk") {
+      // pages30m: run = idle temp until 土豪过审新 run
+      set = (gojo.run && gojo.run[0] && gojo.run[0].complete) ? gojo.run : gojo.idle;
+      idx = Math.floor(time * 10) % 8;
+    } else {
+      set = gojo.idle;
+      idx = Math.floor(time * 8) % 8;
+    }
+    if (f.phase > 0) alpha = 0.55;
+    else if (f.invuln > 0 && !isDowned(f) && !isAirborne(f) && Math.sin(time * 40) > 0) alpha *= 0.45;
+    var drawAir = (f.airH || 0);
+    if (f.busy > 0 || (f.anim && f.anim.indexOf("g_") === 0)) drawAir = 0;
+    var tiltUse = (set === gojo.hitstun || set === gojo.knock) ? 0 : fighterDrawTilt(f);
+    drawGojoAt(f.x, f.y - drawAir, drawFacing, set, idx, alpha, tiltUse, f.hitShake || 0);
+  }
+
   function drawFighter(f) {
     drawGroundShadow(f);
     drawHyperArmorAura(f);
@@ -4388,6 +4690,10 @@
     }
     if (isTanjiro(f)) {
       drawTanjiro(f);
+      return;
+    }
+    if (isGojo(f)) {
+      drawGojo(f);
       return;
     }
     drawPain(f);
@@ -4424,6 +4730,10 @@
     }
     if (g.kit === "tanjiro") {
       drawTanjiroAt(g.x, g.y, g.facing, tanjiro.idle, 0, a, 0, 0);
+      return;
+    }
+    if (g.kit === "gojo") {
+      drawGojoAt(g.x, g.y, g.facing, gojo.idle, 0, a, 0, 0);
       return;
     }
     if (g.kit === "pain" || (!g.kit && g.owner === "R")) {
@@ -5310,6 +5620,17 @@
       ctx.font = "bold 12px sans-serif";
       ctx.textAlign = fromRight ? "right" : "left";
       ctx.fillText("火之形态", fromRight ? bx + bw : bx, by + ((f.hyperArmor || 0) > 0 ? 36 : 20));
+    }
+    if (isGojo(f) && (f.phase || 0) > 0) {
+      ctx.fillStyle = "#a0c8ff";
+      ctx.font = "bold 12px sans-serif";
+      ctx.textAlign = fromRight ? "right" : "left";
+      ctx.fillText("无下限 " + f.phase.toFixed(1) + "s", fromRight ? bx + bw : bx, by + ((f.hyperArmor || 0) > 0 ? 36 : 20));
+    } else if (isGojo(f) && (f.domainT || 0) > 0) {
+      ctx.fillStyle = "#c080ff";
+      ctx.font = "bold 12px sans-serif";
+      ctx.textAlign = fromRight ? "right" : "left";
+      ctx.fillText("领域 " + f.domainT.toFixed(1) + "s", fromRight ? bx + bw : bx, by + ((f.hyperArmor || 0) > 0 ? 36 : 20));
     }
     if (isTanjiro(f) && (f.barrierT || 0) > 0 && !f.barrierUsed) {
       ctx.fillStyle = "#5ee0d0";
@@ -6931,7 +7252,7 @@
           if (loadMode === "match") return;
           ["obito", "pain", "tanjiro"].forEach(function (k) { registerKitSheets(k); });
           loadMode = "prefetch";
-          ensureGroups(["obito", "pain", "tanjiro"], "prefetch");
+          ensureGroups(["obito", "pain", "tanjiro", "gojo"], "prefetch");
         }, 200);
       })
       .catch(function (e) { if (window.console) console.error("[manifest]", e); });
