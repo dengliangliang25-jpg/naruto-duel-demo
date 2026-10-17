@@ -71,7 +71,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 30s stall → retry UI.
-  var ASSET_V = "pages31h";
+  var ASSET_V = "pages31i";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [], ichigo: [], fushiguro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 6;
@@ -418,7 +418,7 @@
       bindArr(tanjiro.hitstun); bindArr(tanjiro.knock);
     } else if (kitId === "gojo") {
       bindArr(gojo.idle); bindArr(gojo.run); bindArr(gojo.hitstun); bindArr(gojo.knock);
-      bindArr(gojo.atk); bindArr(gojo.blue); bindArr(gojo.red); bindArr(gojo.blink);
+      bindArr(gojo.atk); bindArr(gojo.blue); bindArr(gojo.red); bindArr(gojo.blink); bindArr(gojo.foldResidue);
       bindArr(gojo.infinity); bindArr(gojo.infinityLoop); bindArr(gojo.domain);
     } else if (kitId === "luffy") {
       bindArr(luffy.idle); bindArr(luffy.run); bindArr(luffy.hitstun); bindArr(luffy.knock);
@@ -675,7 +675,7 @@
   var tanjiroBodyW = 211 * tanjiroScale;
   var tanjiroBodyH = 360 * tanjiroScale;
 
-  // pages30s: 五条悟 — +领域 skill_domain×6
+  // pages31i: 五条 — R扇波 / F折返(+残影)；旧 aka/blink 文件保留不绑
   var gojo = {
     idle: loadNumbered("gojo/idle", 8),
     run: loadNumbered("gojo/run", 8),
@@ -683,8 +683,9 @@
     knock: loadNumbered("gojo/knockdown", 6),
     atk: loadNumbered("gojo/attack", 6),
     blue: loadNumbered("gojo/skill_ao", 6),
-    red: loadNumbered("gojo/skill_aka", 6),
-    blink: loadNumbered("gojo/skill_blink", 6),
+    red: loadNumbered("gojo/skill_fanwave", 6),
+    blink: loadNumbered("gojo/skill_fold", 6),
+    foldResidue: loadNumbered("gojo/skill_fold/fx_residue", 4),
     infinity: loadNumbered("gojo/skill_infinity", 6),
     infinityLoop: loadNumbered("gojo/infinity_loop", 4),
     domain: loadNumbered("gojo/skill_domain", 6)
@@ -695,7 +696,7 @@
   var gojoBodyW = 145 * gojoScale;
   var gojoBodyH = 390 * gojoScale;
 
-  // pages30v: 路飞全套 — +二档 idle/run/attack + 金刚枪
+  // pages31i: 路飞 — V橡皮火箭炮×8；旧 konggun 文件保留不绑
   var luffy = {
     idle: loadNumbered("luffy/idle", 8),
     run: loadNumbered("luffy/run", 8),
@@ -708,7 +709,7 @@
     gear2Idle: loadNumbered("luffy/gear2_idle", 8),
     gear2Run: loadNumbered("luffy/gear2_run", 8),
     gear2Atk: loadNumbered("luffy/gear2_attack", 6),
-    spear: loadNumbered("luffy/skill_konggun", 6)
+    spear: loadNumbered("luffy/skill_rocket", 8)
   };
   // canvas 320×436；面朝右 → nativeDir +1
   var luffyFootPad = 8;
@@ -716,7 +717,7 @@
   var luffyBodyW = 145 * luffyScale;
   var luffyBodyH = 436 * luffyScale;
 
-  // pages31b: 一护全套 — +bankai idle/run/attack + skill_bankai + mugetsu + fx_mugetsu
+  // pages31i: 一护 — R斩击突进 / V黑月牙；旧 flash/mugetsu 文件保留不绑
   var ichigo = {
     idle: loadNumbered("ichigo/idle", 8),
     run: loadNumbered("ichigo/run", 8),
@@ -724,14 +725,14 @@
     knock: loadNumbered("ichigo/knockdown", 6),
     atk: loadNumbered("ichigo/attack", 6),
     getsuga: loadNumbered("ichigo/skill_getsuga", 6),
-    flash: loadNumbered("ichigo/skill_flash", 6),
+    flash: loadNumbered("ichigo/skill_slashdash", 6),
     block: loadNumbered("ichigo/skill_block", 6),
     bankaiIdle: loadNumbered("ichigo/bankai_idle", 8),
     bankaiRun: loadNumbered("ichigo/bankai_run", 8),
     bankaiAtk: loadNumbered("ichigo/bankai_attack", 6),
     bankai: loadNumbered("ichigo/skill_bankai", 6),
-    mugetsu: loadNumbered("ichigo/skill_mugetsu", 6),
-    mugetsuFx: loadNumbered("ichigo/fx_mugetsu", 6)
+    mugetsu: loadNumbered("ichigo/skill_blackgetsuga", 6),
+    mugetsuFx: loadNumbered("ichigo/fx_blackgetsuga", 6)
   };
   // canvas 320×436；opaque ~307×378；脚底距底 ~8px；面朝右 → nativeDir +1
   var ichigoFootPad = 8;
@@ -998,8 +999,8 @@
       skills: {
         atk: { key: "Q", name: "无下限拳", role: "平A", cd: 0, max: 0.4, cost: 0 },
         blue: { key: "E", name: "苍", role: "吸引", cd: 0, max: 3.4, cost: 18 },
-        red: { key: "R", name: "赫", role: "远程", cd: 0, max: 2.2, cost: 22 },
-        blink: { key: "F", name: "瞬步", role: "突进", cd: 0, max: 1.5, cost: 16 },
+        red: { key: "R", name: "斥力扇波", role: "爆发", cd: 0, max: 3.6, cost: 26 },
+        blink: { key: "F", name: "空间折返", role: "折返", cd: 0, max: 2.8, cost: 20 },
         infinity: { key: "C", name: "无下限", role: "灵体", cd: 0, max: 7.8, cost: 30 },
         domain: { key: "V", name: "领域", role: "绝技", cd: 0, max: 20, cost: 0 }
       }
@@ -1013,10 +1014,10 @@
       skills: {
         atk: { key: "Q", name: "橡胶拳", role: "平A", cd: 0, max: 0.4, cost: 0 },
         gatling: { key: "E", name: "机关枪", role: "连击", cd: 0, max: 6, cost: 20 },
-        pistol: { key: "R", name: "橡胶枪", role: "突进", cd: 0, max: 1.5, cost: 16 },
-        balloon: { key: "F", name: "气球", role: "防御", cd: 0, max: 8, cost: 25 },
+        pistol: { key: "R", name: "橡胶枪", role: "突进", cd: 0, max: 2.6, cost: 19 },
+        balloon: { key: "F", name: "气球", role: "防御", cd: 0, max: 9, cost: 28 },
         gear2: { key: "C", name: "二档", role: "变身", cd: 0, max: 20, cost: 0 },
-        spear: { key: "V", name: "金刚枪", role: "大招", cd: 0, max: 0, cost: 0 }
+        spear: { key: "V", name: "橡皮火箭炮", role: "大招", cd: 0, max: 0, cost: 0 }
       }
     },
     ichigo: {
@@ -1028,10 +1029,10 @@
       skills: {
         atk: { key: "Q", name: "斩月", role: "平A", cd: 0, max: 0.35, cost: 0 },
         getsuga: { key: "E", name: "月牙天冲", role: "远程", cd: 0, max: 2.2, cost: 22 },
-        flash: { key: "R", name: "瞬步", role: "突进", cd: 0, max: 1.5, cost: 16 },
-        block: { key: "F", name: "挡刀", role: "防御", cd: 0, max: 8, cost: 25 },
+        flash: { key: "R", name: "斩击突进", role: "突进", cd: 0, max: 2.0, cost: 14 },
+        block: { key: "F", name: "挡刀", role: "防御", cd: 0, max: 7, cost: 22 },
         bankai: { key: "C", name: "天锁斩月", role: "变身", cd: 0, max: 20, cost: 0 },
-        mugetsu: { key: "V", name: "无月", role: "大招", cd: 0, max: 0, cost: 0 }
+        mugetsu: { key: "V", name: "黑月牙三连", role: "大招", cd: 0, max: 12, cost: 12 }
       }
     },
     fushiguro: {
@@ -1043,7 +1044,7 @@
       skills: {
         atk: { key: "Q", name: "影刺", role: "平A", cd: 0, max: 0.35, cost: 0 },
         dogs: { key: "E", name: "玉犬", role: "突进", cd: 0, max: 6, cost: 20 },
-        nue: { key: "R", name: "鵺", role: "远程", cd: 0, max: 2.2, cost: 22 },
+        nue: { key: "R", name: "鵺俯冲", role: "落击", cd: 0, max: 3.5, cost: 20 },
         elephant: { key: "F", name: "满象", role: "控制", cd: 0, max: 8, cost: 25 },
         shadow: { key: "C", name: "影换", role: "闪避", cd: 0, max: 1.56, cost: 10 },
         domain: { key: "V", name: "嵌合庭", role: "绝技", cd: 0, max: 20, cost: 0 }
@@ -1928,6 +1929,7 @@
     var mul = (voidSpace && isObito(f)) ? 0.65 : 1;
     if (isTanjiro(f) && f.fireForm && (id === "water2" || id === "water4" || id === "water1")) mul *= 1.4;
     if (isIchigo(f) && f.bankai && (id === "getsuga" || id === "flash" || id === "block" || id === "atk")) mul *= 1.25;
+    if (isGojo(f) && (f.domainT || 0) > 0 && (id === "blue" || id === "red")) mul *= 0.8;
     if (isFushiguro(f) && id === "shadow" && (f.domainT || 0) > 0) mul *= 0.5;
     sk.cd = sk.max * mul;
   }
@@ -2031,7 +2033,7 @@
     else finishRound("draw");
   }
 
-  // pages31g: 释放技能前/技能结束后面向对手（背身技除外）
+  // pages31i: 技能出手前/结束后面向对手（背身技除外）；跑动朝向见 walkFighter
   function faceTowardFoe(f) {
     if (!f || f.hp <= 0) return;
     var foe = nearestEnemy(f);
@@ -2108,6 +2110,24 @@
       castGojoInfinity(f);
       f.chakra -= cost;
       applySkillCd(f, sk, id);
+      return;
+    }
+    // pages31i: 空间折返 — 第1次耗蓝留残影不进CD；再按折回才进CD
+    if (id === "blink" && isGojo(f)) {
+      if ((f.stun || 0) > 0 || isAirborne(f)) { bufferCast(f, id); return; }
+      if (f.foldMark) {
+        if (f.busy > 0 || f.dashT > 0) { bufferCast(f, id); return; }
+        faceTowardFoe(f);
+        castGojoFoldReturn(f);
+        applySkillCd(f, sk, id);
+        return;
+      }
+      if (sk.cd > 0) return;
+      if (f.busy > 0 || f.dashT > 0 || (f.counterT || 0) > 0) { bufferCast(f, id); return; }
+      if ((f.chakra || 0) < cost) return;
+      faceTowardFoe(f);
+      f.chakra -= cost;
+      castGojoFoldPlant(f);
       return;
     }
     if (f.busy > 0 || f.dashT > 0 || (f.counterT || 0) > 0 || (f.ult2Phase || 0) > 0) { bufferCast(f, id); return; }
@@ -2505,41 +2525,56 @@
     }
   }
   function castGojoRed(f) {
-    var dir = f.facing < 0 ? -1 : 1;
+    // pages31i: 斥力扇波 — 近距扇形多段斥退（非飞弹）
     f.anim = "g_red";
     f.animT = 0;
-    f.animDur = 0.45;
-    f.busy = 0.4;
+    f.animDur = 0.63;
+    f.busy = 0.63;
     f.hitPending = false;
-    projectiles.push({
-      kind: "wave",
-      x: f.x + dir * 42,
-      y: f.y - gojoBodyH * 0.5,
-      vx: dir * 640,
-      vy: 0,
-      r: 22,
-      dmg: boosted(f, 18),
-      owner: f.id,
-      life: 0.9,
-      color: "#ff4060"
-    });
-    rings.push({ x: f.x + dir * 50, y: f.y - gojoBodyH * 0.5, life: 0.3, max: 0.3, color: "#ff4060", r0: 8, r1: 48 });
+    f.fanwaveT = 0.45;
+    f.fanwaveHitN = 0;
+    f.fanwaveHits = {};
+    rings.push({ x: f.x + f.facing * 90, y: f.y - gojoBodyH * 0.45, life: 0.5, max: 0.5, color: "rgba(255,64,96,0.65)", r0: 20, r1: 180 });
+    spawnFloater(f.x, f.y - 170, "斥力扇波", "#ff4060");
   }
-  function castGojoBlink(f) {
+  function castGojoFoldPlant(f) {
+    // pages31i: 原地留残影桩；0.9s 内再按 F 折回
+    f.anim = "idle";
+    f.animT = 0;
+    f.animDur = 0.05;
+    f.busy = 0.05;
+    f.hitPending = false;
+    f.foldMark = { x: f.x, y: f.y, facing: f.facing, life: 0.9 };
+    spawnFloater(f.x, f.y - 170, "残影", "#c080ff");
+  }
+  function castGojoFoldReturn(f) {
+    var mark = f.foldMark;
+    f.foldMark = null;
     f.anim = "g_blink";
     f.animT = 0;
-    f.animDur = 0.28;
-    f.busy = 0.28;
+    f.animDur = 0.35;
+    f.busy = 0.35;
     f.hitPending = false;
-    ghosts.push({
-      x: f.x, y: f.y, facing: f.facing, life: 0.28, max: 0.28,
-      palette: f.palette, weapon: f.weapon, owner: f.id, kit: f.kit
-    });
-    f.invuln = Math.max(f.invuln || 0, 0.15);
-    var spot = clampSpot(f.x + f.facing * 220, f.y);
-    spot.x = clamp(spot.x, 175, W - 175);
-    f.x = spot.x;
-    f.y = spot.y;
+    f.invuln = Math.max(f.invuln || 0, 0.12);
+    if (mark) {
+      var spot = clampSpot(mark.x, mark.y);
+      spot.x = clamp(spot.x, 175, W - 175);
+      f.x = spot.x;
+      f.y = spot.y;
+    }
+    faceTowardFoe(f);
+    rings.push({ x: f.x, y: f.y - gojoBodyH * 0.4, life: 0.35, max: 0.35, color: "rgba(160,80,255,0.75)", r0: 12, r1: 90 });
+    var foes = livingEnemies(f), i, t;
+    for (i = 0; i < foes.length; i++) {
+      t = foes[i];
+      var dx = t.x - f.x, dy = t.y - f.y;
+      if (dx * dx + dy * dy < 100 * 100) hurt(t, boosted(f, 10), "#c080ff", { attacker: f, noLaunch: true });
+    }
+    spawnFloater(f.x, f.y - 190, "空间折返", "#c080ff");
+  }
+  function castGojoBlink(f) {
+    // legacy path unused; fold uses plant/return
+    castGojoFoldPlant(f);
   }
   function castGojoInfinity(f) {
     // pages30r: 施放条 skill_infinity×6，随后 phase 期间播 infinity_loop
@@ -2609,7 +2644,7 @@
       x: f.x, y: f.y, facing: f.facing, life: 0.25, max: 0.25,
       palette: f.palette, weapon: f.weapon, owner: f.id, kit: f.kit
     });
-    var spot = clampSpot(f.x + f.facing * 200, f.y);
+    var spot = clampSpot(f.x + f.facing * 260, f.y);
     spot.x = clamp(spot.x, 175, W - 175);
     f.x = spot.x;
     f.y = spot.y;
@@ -2645,20 +2680,24 @@
     spawnFloater(f.x, f.y - 160, "二档结束", "#c08070");
   }
   function castLuffySpear(f) {
+    // pages31i: 橡皮火箭炮 — 蓄力→弹出贯穿→弹跳追击；仍清空退二档
     f.anim = "l_spear";
     f.animT = 0;
-    f.animDur = 0.7;
-    f.busy = 0.7;
-    f.hyperArmor = Math.max(f.hyperArmor || 0, 0.7);
+    f.animDur = 1.05;
+    f.busy = 1.05;
+    f.hyperArmor = Math.max(f.hyperArmor || 0, 1.05);
     f.hitPending = true;
-    f.hitAt = 0.35;
-    f.meleeDmg = boosted(f, 36);
-    f.meleeRange = 400;
+    f.hitAt = 0.4;
+    f.hitPending2 = true;
+    f.hitAt2 = 0.78;
+    f.meleeDmg = boosted(f, 28);
+    f.meleeRange = 380;
     f.meleeLaunch = true;
+    f.rocketBounce = true;
     f.chakra = 0;
     exitLuffyGear2(f);
-    spawnFloater(f.x, f.y - 190, "金刚枪", "#ffe7a0");
-    rings.push({ x: f.x + f.facing * 120, y: f.y - luffyBodyH * 0.45, life: 0.5, max: 0.5, color: "rgba(255,220,120,0.7)", r0: 12, r1: 90 });
+    spawnFloater(f.x, f.y - 190, "橡皮火箭炮", "#ffe7a0");
+    rings.push({ x: f.x + f.facing * 120, y: f.y - luffyBodyH * 0.45, life: 0.55, max: 0.55, color: "rgba(255,220,120,0.7)", r0: 12, r1: 100 });
   }
 
   // pages31b: 一护技能全套帧；查克拉同二档：tryCast 减半一次、−8/s、无 chakraLock=999
@@ -2698,20 +2737,25 @@
     rings.push({ x: f.x + dir * 55, y: f.y - ichigoBodyH * 0.5, life: 0.3, max: 0.3, color: "#ff7a30", r0: 8, r1: 52 });
   }
   function castIchigoFlash(f) {
+    // pages31i: 斩击突进 — 人始终在画面内带刀光前冲 ≈180px
     f.anim = "i_flash";
     f.animT = 0;
-    f.animDur = 0.28;
-    f.busy = 0.28;
-    f.hitPending = false;
-    ghosts.push({
-      x: f.x, y: f.y, facing: f.facing, life: 0.28, max: 0.28,
-      palette: f.palette, weapon: f.weapon, owner: f.id, kit: f.kit
-    });
-    f.invuln = Math.max(f.invuln || 0, 0.12);
-    var spot = clampSpot(f.x + f.facing * 220, f.y);
-    spot.x = clamp(spot.x, 175, W - 175);
-    f.x = spot.x;
-    f.y = spot.y;
+    f.animDur = 0.32;
+    f.busy = 0.32;
+    f.armor = Math.max(f.armor || 0, 0.1);
+    f.hitPending = true;
+    f.hitAt = 0.14;
+    f.meleeDmg = boosted(f, f.bankai ? 16 : 12);
+    f.meleeRange = 200;
+    f.meleeLaunch = false;
+    f.slashFrom = f.x;
+    f.dashT = 0.28;
+    f.dashDelay = 0;
+    f.dashVx = f.facing * (180 / 0.28);
+    f.dashVy = 0;
+    f.dashHit = false;
+    f.dashDmg = boosted(f, f.bankai ? 16 : 12);
+    spawnFloater(f.x, f.y - 170, "斩击突进", "#e8a040");
   }
   function castIchigoBlock(f) {
     f.anim = "i_block";
@@ -2743,21 +2787,34 @@
     f.moveSpeed = f.baseMoveSpeed || 510;
     spawnFloater(f.x, f.y - 160, "天锁结束", "#c08070");
   }
+  function spawnBlackGetsuga(f) {
+    var dir = f.facing < 0 ? -1 : 1;
+    projectiles.push({
+      kind: "wave",
+      x: f.x + dir * 52,
+      y: f.y - ichigoBodyH * 0.55,
+      vx: dir * 580,
+      vy: -40,
+      r: 36,
+      dmg: boosted(f, 16),
+      owner: f.id,
+      life: 0.85,
+      color: "#201028"
+    });
+    rings.push({ x: f.x + dir * 60, y: f.y - ichigoBodyH * 0.55, life: 0.28, max: 0.28, color: "rgba(40,16,48,0.8)", r0: 10, r1: 70 });
+  }
   function castIchigoMugetsu(f) {
+    // pages31i: 黑月牙三连 — 须 bankai；每道12蓝（首发已在 tryCast 扣）；不清空不退形态
     f.anim = "i_mugetsu";
     f.animT = 0;
-    f.animDur = 1.7;
-    f.busy = 1.7;
-    f.hyperArmor = Math.max(f.hyperArmor || 0, 1.7);
-    f.hitPending = true;
-    f.hitAt = 1.2;
-    f.meleeDmg = boosted(f, 42);
-    f.meleeRange = 520;
-    f.meleeLaunch = true;
-    f.chakra = 0;
-    exitIchigoBankai(f);
-    spawnFloater(f.x, f.y - 190, "无月", "#202028");
-    rings.push({ x: f.x, y: f.y - ichigoBodyH * 0.4, life: 0.8, max: 0.8, color: "rgba(20,20,28,0.75)", r0: 30, r1: 420 });
+    f.animDur = 1.15;
+    f.busy = 1.15;
+    f.hyperArmor = Math.max(f.hyperArmor || 0, 0.35);
+    f.hitPending = false;
+    f.blackGetsugaLeft = 2;
+    f.blackGetsugaAt = 0.38;
+    spawnBlackGetsuga(f);
+    spawnFloater(f.x, f.y - 190, "黑月牙", "#301838");
   }
 
   // pages31f: 伏黑技能（对照 04_伏黑惠.md）。判定统一在 resolveFushi（hitAt 到点触发）
@@ -2781,12 +2838,18 @@
     f.fushiDogsHit = {};
   }
   function castFushiNue(f) {
+    // pages31i: 鵺俯冲抓击 — 预警后俯冲多段电，无水平弹
+    var dir = f.facing < 0 ? -1 : 1;
     f.anim = "f_nue";
     f.animT = 0;
-    f.animDur = 0.6;
-    f.busy = 0.5;
+    f.animDur = 1.15;
+    f.busy = 1.15;
     f.hitPending = true;
-    f.hitAt = 0.25;
+    f.hitAt = 0.22;
+    f.fushiNueSpot = { x: clamp(f.x + dir * 220, 90, W - 90), y: f.y };
+    f.fushiNueDiveT = 0;
+    f.fushiNueHits = {};
+    rings.push({ x: f.fushiNueSpot.x, y: f.fushiNueSpot.y - 10, life: 0.35, max: 0.35, color: "rgba(154,208,255,0.55)", r0: 16, r1: 70 });
   }
   function castFushiElephant(f) {
     f.anim = "f_elephant";
@@ -2826,20 +2889,10 @@
       // 玉犬：前摇 0.2s 后犬冲 0.7s，路径 ≈280px，咬中盒 ≈90px（每目标一次）
       f.fushiDogsT = 0.7;
     } else if (f.anim === "f_nue") {
-      // 鵺：前摇 0.25s 吐电球，最远 ≈480px
-      projectiles.push({
-        kind: "wave",
-        x: f.x + dir * 50,
-        y: f.y - fushiBodyH * 0.55,
-        vx: dir * 560,
-        vy: 0,
-        r: 20,
-        dmg: boosted(f, 16),
-        owner: f.id,
-        life: 430 / 560,
-        color: "#9ad0ff"
-      });
-      rings.push({ x: f.x + dir * 55, y: f.y - fushiBodyH * 0.55, life: 0.3, max: 0.3, color: "#9ad0ff", r0: 8, r1: 46 });
+      // pages31i: 预警后开始俯冲多段电（落点圈 ≈70px）
+      f.fushiNueDiveT = 0.7;
+      f.fushiNueHits = {};
+      spawnFloater((f.fushiNueSpot && f.fushiNueSpot.x) || f.x, f.y - 190, "鵺俯冲", "#9ad0ff");
     } else if (f.anim === "f_elephant") {
       // 满象：起手 0.3s 后喷水 1.0s，水柱 ≈320×80px；命中击退 + 移速×0.5 持续 1.5s
       f.fushiWaterT = 1.0;
@@ -2864,6 +2917,24 @@
       }
       if (f.anim !== "f_dogs") f.fushiDogsT = 0;
     }
+    if ((f.fushiNueDiveT || 0) > 0) {
+      f.fushiNueDiveT = Math.max(0, f.fushiNueDiveT - dt);
+      var spotN = f.fushiNueSpot || { x: f.x, y: f.y };
+      var tickN = Math.floor((0.7 - f.fushiNueDiveT) / 0.18);
+      foes = livingEnemies(f);
+      for (i = 0; i < foes.length; i++) {
+        t = foes[i];
+        var ndx = t.x - spotN.x, ndy = t.y - spotN.y;
+        if (ndx * ndx + ndy * ndy > 70 * 70) continue;
+        var keyN = t.id + "_" + tickN;
+        if (f.fushiNueHits[keyN]) continue;
+        if (hurt(t, boosted(f, fushiDomainMul(f, t, 7)), "#9ad0ff", { attacker: f, noLaunch: true })) {
+          f.fushiNueHits[keyN] = true;
+          t.x += (f.facing < 0 ? -1 : 1) * 8;
+        }
+      }
+      if (f.anim !== "f_nue") f.fushiNueDiveT = 0;
+    }
     if ((f.fushiWaterT || 0) > 0) {
       f.fushiWaterT = Math.max(0, f.fushiWaterT - dt);
       foes = livingEnemies(f);
@@ -2885,6 +2956,55 @@
       var spot = clampSpot(f.x + dir * 160, f.y);
       f.x = clamp(spot.x, 70, W - 70);
       f.y = spot.y;
+    }
+  }
+  function updateGojoSkills(f, dt) {
+    if (f.foldMark) {
+      f.foldMark.life -= dt;
+      if (f.foldMark.life <= 0) f.foldMark = null;
+    }
+    if ((f.fanwaveT || 0) > 0) {
+      f.fanwaveT = Math.max(0, f.fanwaveT - dt);
+      var elapsed = 0.45 - f.fanwaveT;
+      var wantHit = Math.min(3, Math.floor(elapsed / 0.15) + 1);
+      var dir = f.facing < 0 ? -1 : 1;
+      while ((f.fanwaveHitN || 0) < wantHit) {
+        f.fanwaveHitN = (f.fanwaveHitN || 0) + 1;
+        var foes = livingEnemies(f), i, t;
+        for (i = 0; i < foes.length; i++) {
+          t = foes[i];
+          var rel = (t.x - f.x) * dir;
+          var lat = Math.abs(t.y - f.y);
+          if (rel < 0 || rel > 180) continue;
+          if (lat > Math.max(40, rel * 0.9)) continue;
+          var key = t.id + "_" + f.fanwaveHitN;
+          if (f.fanwaveHits && f.fanwaveHits[key]) continue;
+          if (hurt(t, boosted(f, 8), "#ff4060", { attacker: f, noLaunch: true })) {
+            if (!f.fanwaveHits) f.fanwaveHits = {};
+            f.fanwaveHits[key] = true;
+            t.x += dir * 22;
+            t.stun = Math.max(t.stun || 0, 0.12);
+          }
+        }
+      }
+      if (f.anim !== "g_red") f.fanwaveT = 0;
+    }
+  }
+  function updateIchigoSkills(f, dt) {
+    if ((f.blackGetsugaLeft || 0) > 0) {
+      f.blackGetsugaAt = (f.blackGetsugaAt || 0) - dt;
+      if (f.blackGetsugaAt <= 0) {
+        if ((f.chakra || 0) >= 12) {
+          f.chakra -= 12;
+          spawnBlackGetsuga(f);
+          f.blackGetsugaLeft -= 1;
+          f.blackGetsugaAt = 0.35;
+        } else {
+          f.blackGetsugaLeft = 0;
+          spawnFloater(f.x, f.y - 160, "蓝不足", "#c080a0");
+        }
+      }
+      if (f.anim !== "i_mugetsu") f.blackGetsugaLeft = 0;
     }
   }
   function fushiDomainMul(f, t, dmg) {
@@ -3396,9 +3516,15 @@
     } else if (f.anim === "t_atk" || f.anim === "t_counter") {
       var rng = f.meleeRange || (tanjiroBodyW * 1.4);
       if (inFront && dist < rng) hurt(opp, f.meleeDmg || 12, f.palette.glow, { attacker: f });
-    } else if (f.anim === "g_atk" || f.anim === "l_atk" || f.anim === "l_gatling" || f.anim === "l_pistol" || f.anim === "l_spear" || f.anim === "i_atk" || f.anim === "i_mugetsu") {
+    } else if (f.anim === "g_atk" || f.anim === "l_atk" || f.anim === "l_gatling" || f.anim === "l_pistol" || f.anim === "l_spear" || f.anim === "i_atk" || f.anim === "i_flash" || f.anim === "i_mugetsu") {
       var rngL = f.meleeRange || (luffyBodyW * 1.4);
-      if (inFront && dist < rngL) hurt(opp, f.meleeDmg || 12, f.palette.glow, { attacker: f, launch: !!f.meleeLaunch });
+      if (f.anim === "i_flash") {
+        var x0s = f.slashFrom != null ? f.slashFrom : f.x;
+        var passedS = opp.x >= Math.min(x0s, f.x) - 20 && opp.x <= Math.max(x0s, f.x) + 20 && Math.abs(dy) < 90;
+        if (dist < rngL || passedS) hurt(opp, f.meleeDmg || 12, f.palette.glow, { attacker: f });
+      } else if (inFront && dist < rngL) {
+        hurt(opp, f.meleeDmg || 12, f.palette.glow, { attacker: f, launch: !!f.meleeLaunch });
+      }
     }
   }
 
@@ -3445,8 +3571,7 @@
         iy += sticks[1].ny;
       }
     }
-    // pages31g: 摇杆残余视为停步。站位/跑动/越过对手后一律面朝对手
-    // （不再跟移动方向改 facing，避免越过对手后背对）。背身技在 cast 里自行改。
+    // pages31i: 跑=跟位移朝向；idle/停步/顶墙不动=面朝对手。背身技在 cast 里自行改。
     if (Math.abs(ix) < 0.2) ix = 0;
     if (Math.abs(iy) < 0.2) iy = 0;
     if (ix === 0 && iy === 0) {
@@ -3462,12 +3587,17 @@
     if ((f.fushiSlowT || 0) > 0) speed *= 0.5; // pages31f: 满象命中减速
     var step = clampSpot(f.x + ix / len * speed * dt, f.y + iy / len * speed * dt);
     // pages31f/g: 顶墙/被挡住原地不动时不播跑步（松键立即站立）
-    if (Math.abs(step.x - f.x) + Math.abs(step.y - f.y) < speed * dt * 0.05) f.gait = "idle";
+    var moved = Math.abs(step.x - f.x) + Math.abs(step.y - f.y) >= speed * dt * 0.05;
+    if (!moved) {
+      f.gait = "idle";
+      if (!(f.busy > 0) && !(f.dashT > 0) && !(f.counterT > 0) && !(f.ult2Phase > 0)) faceTowardFoe(f);
+    } else if (!(f.busy > 0) && !(f.dashT > 0) && !(f.counterT > 0) && !(f.ult2Phase > 0)) {
+      // 跑动朝向跟水平位移；纯纵向移动时保持面朝对手
+      if (Math.abs(step.x - f.x) > 0.01) f.facing = step.x >= f.x ? 1 : -1;
+      else faceTowardFoe(f);
+    }
     f.x = step.x;
     f.y = step.y;
-    if (!(f.busy > 0) && !(f.dashT > 0) && !(f.counterT > 0) && !(f.ult2Phase > 0)) {
-      faceTowardFoe(f);
-    }
   }
 
   function updateOneAI(f, dt) {
@@ -3482,8 +3612,6 @@
     var dx = opp.x - f.x;
     var dy = opp.y - f.y;
     var dist = Math.sqrt(dx * dx + dy * dy) || 1;
-    if (dx < 0) f.facing = -1;
-    else if (dx > 0) f.facing = 1;
     f.aiThink = (f.aiThink || 0) - dt;
     var wantX = 0;
     var wantY = 0;
@@ -3502,8 +3630,11 @@
       wantX = -dx / dist;
       wantY = (Math.random() - 0.5) * 0.4;
     }
-    f.aiIx = wantX;
+        f.aiIx = wantX;
     f.aiIy = wantY;
+    // pages31i: AI 跑动跟位移朝向，停步面朝对手
+    if (Math.abs(wantX) > 0.15) f.facing = wantX > 0 ? 1 : -1;
+    else faceTowardFoe(f);
     if (f.busy > 0 || f.dashT > 0 || f.shield > 0 || f.shieldWind > 0) return;
     if (f.aiThink > 0) return;
     // pages29: practice default = no auto-attack (player triggers enemy skills manually)
@@ -4015,6 +4146,8 @@
       if (isIchigo(f) && (f.busy > 0 || (f.anim && f.anim.indexOf("i_") === 0))) plantCaster(f);
       if (isFushiguro(f) && (f.busy > 0 || (f.anim && f.anim.indexOf("f_") === 0))) plantCaster(f);
       if (isFushiguro(f)) updateFushiSkills(f, dt);
+      if (isGojo(f)) updateGojoSkills(f, dt);
+      if (isIchigo(f)) updateIchigoSkills(f, dt);
       if ((f.fushiSlowT || 0) > 0) f.fushiSlowT = Math.max(0, f.fushiSlowT - dt);
       if (isAirborne(f)) {
         f.dashT = 0;
@@ -4123,7 +4256,7 @@
           f.dashT = 0;
           f.dashDelay = 0;
           f.dashDmg = 0;
-          if (f.anim === "t_water4") { /* keep anim until animDur */ }
+          if (f.anim === "t_water4" || f.anim === "i_flash") { /* keep anim until animDur */ }
           else f.anim = "idle";
         }
       } else {
@@ -4172,6 +4305,17 @@
         if (f.hitPending2 && f.animT >= f.hitAt2) {
           f.hitPending2 = false;
           if (f.anim === "combo") spawnComboFlash(f);
+          if (f.anim === "l_spear" && f.rocketBounce) {
+            f.meleeRange = 140;
+            f.meleeDmg = boosted(f, 18);
+            var foeR = nearestEnemy(f);
+            if (foeR) {
+              var dirR = foeR.x >= f.x ? 1 : -1;
+              var spotR = clampSpot(f.x + dirR * 100, f.y);
+              f.x = spotR.x; f.y = spotR.y;
+              faceTowardFoe(f);
+            }
+          }
           resolveMelee(f);
         }
         if (f.animT >= f.animDur) {
@@ -5407,9 +5551,18 @@
     ctx.stroke();
     ctx.restore();
   }
+  function drawGojoFoldMark(f) {
+    var m = f.foldMark;
+    if (!m || !gojo.foldResidue || !gojo.foldResidue[0] || !gojo.foldResidue[0].complete) return;
+    var u = 1 - Math.max(0, m.life / 0.9);
+    var idx = Math.min(3, Math.floor(u * 4));
+    var a = 0.35 + 0.35 * Math.max(0, m.life / 0.9);
+    drawGojoAt(m.x, m.y, m.facing || 1, gojo.foldResidue, idx, a, 0, 0);
+  }
   function drawGojo(f) {
     drawGojoDomainRing(f);
     drawGojoInfinityAura(f);
+    drawGojoFoldMark(f);
     var set = gojo.idle;
     var idx = 0;
     var alpha = 1;
@@ -5585,7 +5738,7 @@
       set = luffy.spear;
       var usp = f.animDur > 0 ? f.animT / f.animDur : 1;
       if (usp < 0) usp = 0; if (usp > 0.999) usp = 0.999;
-      idx = Math.min(5, Math.floor(usp * 6));
+      idx = Math.min(7, Math.floor(usp * 8));
     } else if (f.anim && f.anim.indexOf("l_") === 0) {
       set = (f.gear2 && luffy.gear2Idle && luffy.gear2Idle[0] && luffy.gear2Idle[0].complete) ? luffy.gear2Idle : luffy.idle;
       idx = Math.min(7, Math.floor(((f.animT || 0) / Math.max(0.01, f.animDur || 0.4)) * 8));
