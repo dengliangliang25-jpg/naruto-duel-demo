@@ -70,7 +70,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
-  var ASSET_V = "pages30m";
+  var ASSET_V = "pages30n";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 8;
@@ -647,7 +647,7 @@
   var tanjiroBodyW = 211 * tanjiroScale;
   var tanjiroBodyH = 360 * tanjiroScale;
 
-  // pages30m: 五条悟 — 基础帧选角预览；run 暂用 idle 顶（画风未过审）
+  // pages30n: 五条悟 — 基础帧 + 土豪过审定稿 run
   var gojo = {
     idle: loadNumbered("gojo/idle", 8),
     run: loadNumbered("gojo/run", 8),
@@ -4666,7 +4666,7 @@
       set = gojo.idle;
       idx = Math.min(7, Math.floor(((f.animT || 0) / Math.max(0.01, f.animDur || 0.4)) * 8));
     } else if (f.gait === "run" || f.gait === "walk") {
-      // pages30m: run = idle temp until 土豪过审新 run
+      // pages30n: run = 土豪过审定稿
       set = (gojo.run && gojo.run[0] && gojo.run[0].complete) ? gojo.run : gojo.idle;
       idx = Math.floor(time * 10) % 8;
     } else {
