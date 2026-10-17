@@ -70,7 +70,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
-  var ASSET_V = "pages30c";
+  var ASSET_V = "pages30d";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 8;
@@ -728,6 +728,7 @@
       getUpMax: 0,
       knockPhase: null,
       knockT: 0,
+      knockNoBlink: 0,
       hpChip: 100,
       barDmg: 0,
       barDmgT: 0,
@@ -1184,6 +1185,7 @@
     f.getUpMax = 0;
     f.knockPhase = null;
     f.knockT = 0;
+    f.knockNoBlink = 0;
     f.hpChip = f.maxHp;
     f.barDmg = 0;
     f.barDmgT = 0;
@@ -1434,6 +1436,7 @@
     f.hitPushVy = 0;
     f.stun = Math.max(f.stun || 0, 0.40 + 0.52);
     f.invuln = Math.max(f.invuln || 0, 0.40 + 0.52);
+    f.knockNoBlink = Math.max(f.knockNoBlink || 0, 0.40 + 0.52);
     f.gait = "idle";
     f.anim = "idle";
   }
@@ -3033,15 +3036,19 @@
         f.gait = "idle";
         f.invuln = Math.max(f.invuln || 0, 0.05);
         f.stun = Math.max(f.stun || 0, 0.05);
+        f.knockNoBlink = Math.max(f.knockNoBlink || 0, 0.05);
         if (f.getUpT <= 0) {
           f.getUpT = 0;
           f.getUpMax = 0;
           f.hitLean = 0;
           f.hitLight = false;
           f.invuln = Math.max(f.invuln || 0, 0.12);
+          // pages30d: no white invuln blink right after standing up
+          f.knockNoBlink = Math.max(f.knockNoBlink || 0, 0.55);
         }
         continue;
       }
+      if ((f.knockNoBlink || 0) > 0) f.knockNoBlink = Math.max(0, f.knockNoBlink - dt);
 
       // Ease out light lean after stun ends.
       if ((f.stun || 0) <= 0 && (f.hitLean || 0) > 0) {
@@ -3739,10 +3746,10 @@
     return img;
   }
 
-  function drawObitoAt(x, groundY, facing, set, index, alpha, phased, footDrop, tilt, shakeAmp) {
+  function drawObitoAt(x, groundY, facing, set, index, alpha, phased, footDrop, tilt, shakeAmp, scaleMul) {
     var img = obitoImage(set, index);
     if (!img) return;
-    var sc = obitoScale;
+    var sc = obitoScale * (scaleMul || 1);
     var sx = 0;
     var sy = 0;
     if (shakeAmp && shakeAmp > 0) {
@@ -3753,6 +3760,7 @@
     var dw = img.width * sc;
     var dh = img.height * sc;
     ctx.save();
+    // Plant canvas bottom on ground; empty top padding of knock cells does not shrink the body.
     ctx.translate(x + sx, groundY + 2 + (footDrop || 0) + sy);
     if (tilt) ctx.rotate(tilt);
     ctx.scale(facing < 0 ? -1 : 1, 1);
@@ -3780,10 +3788,13 @@
     if ((f.knockPhase === "air" || isAirborne(f)) && obito.knock && obito.knock[0] && obito.knock[0].complete) {
       set = obito.knock;
       idx = Math.min(10, Math.floor((f.knockT || 0) * 18));
-    } else if ((f.knockPhase === "down" || isDowned(f)) && obito.knock && obito.knock[0] && obito.knock[0].complete) {
+    } else if ((f.knockPhase === "down" || isDowned(f) || (f.getUpT || 0) > 0 || (f.downT || 0) > 0) && obito.knock && obito.knock[0] && obito.knock[0].complete) {
       set = obito.knock;
       var kt = f.knockT || 0;
-      if (kt < 0.12) idx = 11;
+      if ((f.getUpT || 0) > 0) {
+        // Hold last downed frames through get-up — never fall back to tilted idle
+        idx = 15;
+      } else if (kt < 0.12) idx = 11;
       else if (kt < 0.28) idx = 12;
       else if (kt < 0.45) idx = 13;
       else if (kt < 0.65) idx = 14;
@@ -3818,13 +3829,14 @@
     }
     var phased = f.phase > 0;
     var knocking = set === obito.knock;
-    // pages30: knockdown/air knock must stay fully opaque (no 虚化/invuln blink ghost)
-    if (knocking) {
+    var gettingUp = (f.getUpT || 0) > 0 || (f.downT || 0) > 0 || !!f.knockPhase || isDowned(f);
+    // pages30d: knockdown/air/getUp stay fully opaque — never invuln blink / tilted idle ghost
+    if (knocking || gettingUp) {
       alpha = 1;
       phased = false;
     } else if (phased) {
       alpha = 0.45;
-    } else if (f.anim !== "tele" && f.invuln > 0 && !isDowned(f) && !isAirborne(f) && !(f.knockPhase) && Math.sin(time * 40) > 0) {
+    } else if (f.anim !== "tele" && f.invuln > 0 && !isDowned(f) && !isAirborne(f) && !(f.knockPhase) && !(f.knockNoBlink > 0) && Math.sin(time * 40) > 0) {
       alpha *= 0.45;
     }
     if (phased && phaseSlow > 0) {
@@ -3833,6 +3845,7 @@
       drawSharingan(f, bodyH);
     }
     var footDrop = 0;
+    var knockBoost = 1;
     if (set === obito.tele) {
       var pad = teleFootPad[idx];
       if (pad == null) pad = obitoIdleFootPad;
@@ -3842,10 +3855,13 @@
       if (ipad == null) ipad = obitoIdleFootPads[0];
       footDrop = (ipad - obitoIdleFootPads[0]) * obitoScale;
     } else if (knocking) {
-      // pages30: knock frames share idle canvas; plant soles like idle
+      // pages30d: art sets knock 11–16 logical size to 225×257; extra boost so downed body ≈ standing
       footDrop = 0;
+      var kimg = obitoImage(set, idx);
+      if (kimg && kimg.width >= 200) knockBoost = 1.55;
+      else knockBoost = 1.05;
     }
-    drawObitoAt(f.x, f.y - (f.airH || 0), f.facing, set, idx, alpha, phased, footDrop, knocking ? 0 : fighterDrawTilt(f), knocking ? 0 : (f.hitShake || 0));
+    drawObitoAt(f.x, f.y - (f.airH || 0), f.facing, set, idx, alpha, phased, footDrop, knocking ? 0 : fighterDrawTilt(f), knocking ? 0 : (f.hitShake || 0), knockBoost);
   }
 
   function drawGroundShadow(f) {
