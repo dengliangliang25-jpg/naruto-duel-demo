@@ -70,7 +70,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
-  var ASSET_V = "pages30b";
+  var ASSET_V = "pages30c";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 8;
