@@ -70,7 +70,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
-  var ASSET_V = "pages30h";
+  var ASSET_V = "pages30i";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 8;
@@ -430,16 +430,18 @@
       cardImgs[ids[i]] = img;
     }
   })();
-  // pages30h: 通灵栏 = 4 密卷 + 熊猫通灵（同一 picker）
+  // pages30i: 通灵栏 = 4 密卷 + 熊猫 + 鲛鲨（同一 picker）
   var SCROLL_DEFS = [
     { id: "scroll_quake", name: "霸体", role: "密卷", color: "#e07030", icon: "icons/icon_01.png", max: 18.2, cost: 18, dmg: 0 },
     { id: "scroll_bolt", name: "回蓝", role: "密卷", color: "#40c0ff", icon: "icons/icon_02.png", max: 20.8, cost: 0, dmg: 0 },
     { id: "scroll_blade", name: "清CD", role: "密卷", color: "#f0c040", icon: "icons/icon_03.png", max: 23.4, cost: 12, dmg: 0 },
     { id: "scroll_gale", name: "驱散", role: "密卷", color: "#5080ff", icon: "icons/icon_04.png", max: 15.6, cost: 16, dmg: 0 },
-    { id: "summon_panda", name: "熊猫", role: "通灵", color: "#f0e8d8", icon: "icons/summon_panda.png", body: "icons/summon_panda_body.png", max: 16.0, cost: 14, dmg: 28 }
+    { id: "summon_panda", name: "熊猫", role: "通灵", color: "#f0e8d8", icon: "icons/summon_panda.png", body: "icons/summon_panda_body.png", max: 16.0, cost: 14, dmg: 28 },
+    { id: "summon_shark", name: "鲛鲨", role: "通灵", color: "#6aa0c8", icon: "icons/summon_shark.png", body: "icons/shark_drop.png", max: 16.0, cost: 14, dmg: 28 }
   ];
   var scrollImgs = {};
   var pandaBodyImg = null;
+  var sharkBodyImg = null;
   (function loadScrolls() {
     var i;
     for (i = 0; i < SCROLL_DEFS.length; i++) {
@@ -449,6 +451,8 @@
     }
     pandaBodyImg = regImg(new Image(), "icons/summon_panda_body.png", "core", "core");
     enqueue(pandaBodyImg, "core");
+    sharkBodyImg = regImg(new Image(), "icons/shark_drop.png", "core", "core");
+    enqueue(sharkBodyImg, "core");
   })();
   function isTongLingId(id) {
     var s = String(id || "");
@@ -1754,6 +1758,7 @@
     for (k in cardImgs) { im = cardImgs[k]; if (!im._ok && !im._err) return false; }
     for (k in scrollImgs) { im = scrollImgs[k]; if (!im._ok && !im._err) return false; }
     if (pandaBodyImg && !pandaBodyImg._ok && !pandaBodyImg._err) return false;
+    if (sharkBodyImg && !sharkBodyImg._ok && !sharkBodyImg._err) return false;
     return true;
   }
   // pages26: phone mode
@@ -2143,6 +2148,31 @@
         vx: 0,
         vy: 980,
         landY: landY,
+        r: 78,
+        dmg: (def && def.dmg) || 28,
+        owner: f.id,
+        life: 2.8,
+        age: 0,
+        hit: false,
+        landed: false,
+        scale: 1
+      });
+    } else if (id === "summon_shark") {
+      // pages30i: 鲛鲨从上垂直落下（同熊猫）
+      var landXs = f.x + f.facing * 130;
+      var landYs = f.y - 40;
+      if (opp && opp.hp > 0) {
+        landXs = opp.x;
+        landYs = opp.y - 40;
+      }
+      spawnFloater(f.x, f.y - 190, "通灵·鲛鲨", color);
+      projectiles.push({
+        kind: "shark_drop",
+        x: landXs,
+        y: -60,
+        vx: 0,
+        vy: 980,
+        landY: landYs,
         r: 78,
         dmg: (def && def.dmg) || 28,
         owner: f.id,
@@ -3246,7 +3276,7 @@
         if (p.life <= 0) projectiles.splice(i, 1);
         continue;
       }
-      if (p.kind === "panda_drop") {
+      if (p.kind === "panda_drop" || p.kind === "shark_drop") {
         p.age = (p.age || 0) + dt;
         if (!p.landed) {
           p.y += (p.vy || 980) * dt;
@@ -3255,7 +3285,8 @@
             p.landed = true;
             p.vy = 0;
             p.life = Math.min(p.life, 0.55);
-            rings.push({ x: p.x, y: p.y + 30, life: 0.4, max: 0.4, color: "#f0e8d8", r0: 20, r1: 140 });
+            var dropCol = p.kind === "shark_drop" ? "#6aa0c8" : "#f0e8d8";
+            rings.push({ x: p.x, y: p.y + 30, life: 0.4, max: 0.4, color: dropCol, r0: 20, r1: 140 });
             bursts.push({ x: p.x, y: p.y + 20, life: 0.35, max: 0.35, kind: "impact", facing: 1, scale: 1.8 });
             var ownerPd = projectileOwner(p.owner);
             var foesPd = livingEnemies(ownerPd);
@@ -3266,7 +3297,7 @@
               if (planarDist(p.x, p.y, tgt.x, tgt.y - 60) < (p.r || 78)) {
                 if (hurt(tgt, p.dmg || 28, ownerPd.palette.glow, { attacker: ownerPd })) {
                   p.hit = true;
-                  spawnFloater(tgt.x, tgt.y - 160, "通灵砸", "#f0e8d8");
+                  spawnFloater(tgt.x, tgt.y - 160, "通灵砸", dropCol);
                 }
               }
             }
@@ -4401,8 +4432,8 @@
   }
 
   function drawOneProjectile(p) {
-      if (p.kind === "panda_drop") {
-        var pImg = pandaBodyImg;
+      if (p.kind === "panda_drop" || p.kind === "shark_drop") {
+        var pImg = p.kind === "shark_drop" ? sharkBodyImg : pandaBodyImg;
         if (pImg && pImg.complete && pImg.naturalWidth > 0) {
           var bob = p.landed ? Math.sin((p.age || 0) * 18) * 3 : 0;
           var sc = 0.72 * (p.scale || 1);
@@ -4414,7 +4445,7 @@
           ctx.restore();
         } else {
           ctx.save();
-          ctx.fillStyle = "rgba(240,232,216,0.95)";
+          ctx.fillStyle = p.kind === "shark_drop" ? "rgba(106,160,200,0.95)" : "rgba(240,232,216,0.95)";
           ctx.beginPath();
           ctx.arc(p.x, p.y, 42, 0, Math.PI * 2);
           ctx.fill();
@@ -5843,7 +5874,7 @@
   }
 
   function drawScrollPicker(y, mode) {
-    // mode: "solo" | "vs" — pages30h: 通灵栏（密卷 + 熊猫）
+    // mode: "solo" | "vs" — pages30i: 通灵栏（密卷 + 熊猫 + 鲛鲨）
     var i;
     var iconR = 30;
     var gap = 16;
@@ -5857,9 +5888,9 @@
     ctx.font = "12px sans-serif";
     ctx.fillStyle = "rgba(200,220,230,0.75)";
     if (mode === "vs") {
-      ctx.fillText("通灵：霸体 / 回蓝 / 清CD / 驱散 / 熊猫 · 先赋左再赋右", W / 2, y - 16);
+      ctx.fillText("通灵：霸体 / 回蓝 / 清CD / 驱散 / 熊猫 / 鲛鲨 · 先赋左再赋右", W / 2, y - 16);
     } else {
-      ctx.fillText("通灵：密卷四选一，或熊猫通灵（落下砸击）", W / 2, y - 16);
+      ctx.fillText("通灵：密卷四选一，或熊猫/鲛鲨通灵（落下砸击）", W / 2, y - 16);
     }
     for (i = 0; i < n; i++) {
       var def = SCROLL_DEFS[i];
