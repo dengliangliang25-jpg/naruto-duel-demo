@@ -67,7 +67,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
-  var ASSET_V = "pages27";
+  var ASSET_V = "pages28";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 8;
@@ -4042,6 +4042,15 @@
     if (!img || !img.complete || !img.naturalWidth) return null;
     return img;
   }
+  // pages28: Tanjiro sheets were drawn facing different ways. Idle/walk/atk face LEFT;
+  // dash/lunge sets mostly face RIGHT. Flip with a nativeDir so facing matches movement.
+  function tanjiroNativeDir(set) {
+    if (!set) return -1;
+    if (set === tanjiro.idle || set === tanjiro.water.atk || set === tanjiro.fire.atk) return -1;
+    if (set === tanjiro.water.water2c || set === tanjiro.fire.water2c) return -1;
+    // 二型 / 四型 / 一型 / 大招：多数帧朝右
+    return 1;
+  }
   function drawTanjiroAt(x, groundY, facing, set, index, alpha, tilt, shakeAmp) {
     var img = tanjiroImage(set, index);
     if (!img) return;
@@ -4060,8 +4069,8 @@
     ctx.save();
     ctx.translate(x + sx, y + sy);
     if (tilt) ctx.rotate(tilt);
-    // Art faces RIGHT (same as Obito).
-    ctx.scale(facing < 0 ? -1 : 1, 1);
+    var nativeDir = tanjiroNativeDir(set);
+    ctx.scale((facing < 0 ? -1 : 1) * nativeDir, 1);
     ctx.globalAlpha = alpha;
     ctx.drawImage(img, -dw / 2, -dh, dw, dh);
     ctx.restore();
