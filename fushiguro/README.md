@@ -25,5 +25,23 @@
 - 预览：`/workspace/char/fushiguro/preview_{idle,run,hitstun,knock,base_sheet}.jpg`
 - 处理：单 session rembg + defringe；朝左翻正；脚≈y427；比例跟 idle
 
+
+## Batch 2 技能
+| 目录 | 帧数 | 含义 |
+|------|------|------|
+| `attack/` | 01–06 | 普攻·影刺（脚下黑影尖刺伸出再收回） |
+| `skill_dogs/` | 01–06 | 玉犬（手印召唤→两只黑犬扑咬） |
+| `skill_nue/` | 01–06 | 鵺（鸟翼式神飞出+电球） |
+| `skill_elephant/` | 01–06 | 满象（象头喷高压水柱） |
+| `skill_shadow/` | 01–06 | 影换（没入影子→空影→他处冒出） |
+
+预览：`/workspace/char/fushiguro/preview_{attack,dogs,nue,elephant,shadow}.jpg`
+
+### Batch2 备注
+- gen：`/workspace/char/fushiguro/gen_batch2/`
+- raw：`/workspace/char/fushiguro/raw/{attack,skill_dogs,skill_nue,skill_elephant,skill_shadow}/`
+- 单 session rembg + 黑影/水电特效保护 + defringe；朝右翻正；比例跟 idle（IDLE_H≈355）
+- 嵌合庭不在本批
+
 ## 未交付（后续批）
-- 技能 / 领域帧不在本批
+- 嵌合暗翳庭（大招）不在本批

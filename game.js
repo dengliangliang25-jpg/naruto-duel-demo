@@ -57,6 +57,7 @@
   var practiceNoCdAll = false; // retained for debug helpers; UI no longer exposes per-skill CD toggles
   var practiceNoCd = {}; // skillId -> bool (debug only)
   var practicePanel = false;
+  var practiceAiPick = null; // pages31f
   var countdownPhase = "round"; // round | fight
   var playerSide = "L"; // which side the human controls in AI mode
   var coopAiKits = ["pain", "obito"]; // filled on beginMatch
@@ -70,7 +71,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 30s stall → retry UI.
-  var ASSET_V = "pages31e";
+  var ASSET_V = "pages31f";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [], ichigo: [], fushiguro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 6;
@@ -430,6 +431,7 @@
       bindArr(ichigo.bankai); bindArr(ichigo.mugetsu); bindArr(ichigo.mugetsuFx);
     } else if (kitId === "fushiguro") {
       bindArr(fushiguro.idle); bindArr(fushiguro.run); bindArr(fushiguro.hitstun); bindArr(fushiguro.knock);
+      bindArr(fushiguro.atk); bindArr(fushiguro.shadow);
     }
   }
   function registerKitSheets(kitId) {
@@ -741,7 +743,24 @@
     idle: loadNumbered("fushiguro/idle", 8),
     run: loadNumbered("fushiguro/run", 8),
     hitstun: loadNumbered("fushiguro/hitstun", 6),
-    knock: loadNumbered("fushiguro/knockdown", 6)
+    knock: loadNumbered("fushiguro/knockdown", 6),
+    atk: loadNumbered("fushiguro/attack", 6),
+    // 玉犬/鵺/满象帧被打回返修中：先空（drawFushiguro 播 idle 顶位）。帧到后改回
+    // loadNumbered("fushiguro/skill_dogs"|"skill_nue"|"skill_elephant", 6) 并在 bind 里加上即可
+    dogs: [],
+    nue: [],
+    elephant: [],
+    shadow: loadNumbered("fushiguro/skill_shadow", 6)
+  };
+  // pages31f: 技能帧人物比 idle 小一圈（站姿 ~322 vs 355）→ 技能套放大 1.1；
+  // 部分帧人物偏离画布中心（式神占画面）→ 每帧水平锚点修正（源像素，面朝右为正）
+  var fushiSkillScale = 1.1;
+  var fushiFrameOx = {
+    atk: [0, 0, 0, 0, 0, 0],
+    dogs: [0, 0, 23, 47, 42, 64],
+    nue: [0, -18, 124, 16, 8, 0],
+    elephant: [120, 0, 0, 29, 0, 0],
+    shadow: [0, 0, 0, 0, 0, 0]
   };
   // canvas 320×436；opaque ~108×355；脚底距底 ~8px；面朝右 → nativeDir +1
   var fushiFootPad = 8;
@@ -1747,7 +1766,10 @@
       var ui;
       for (ui = 0; ui < unlocked.length; ui++) if (unlocked[ui] !== humanKit) aiPool.push(unlocked[ui]);
       var aiKit = aiPool.length ? aiPool[Math.floor(Math.random() * aiPool.length)] : "pain";
+      // pages31f: 练习模式固定上一个对手（或面板里「换对手」选的）
+      if (gameMode === "practice" && practiceAiPick && practiceAiPick !== humanKit && aiPool.indexOf(practiceAiPick) >= 0) aiKit = practiceAiPick;
       if (window.__DUEL_AIKIT__ && window.__DUEL_AIKIT__ !== humanKit) aiKit = window.__DUEL_AIKIT__;
+      if (gameMode === "practice") practiceAiPick = aiKit;
       var humanScroll = selectedScroll || SCROLL_DEFS[0].id;
       var aiScroll = pickAiScroll(humanScroll);
       if (humanKit === "pain") {
@@ -1906,6 +1928,7 @@
     var mul = (voidSpace && isObito(f)) ? 0.65 : 1;
     if (isTanjiro(f) && f.fireForm && (id === "water2" || id === "water4" || id === "water1")) mul *= 1.4;
     if (isIchigo(f) && f.bankai && (id === "getsuga" || id === "flash" || id === "block" || id === "atk")) mul *= 1.25;
+    if (isFushiguro(f) && id === "shadow" && (f.domainT || 0) > 0) mul *= 0.5;
     sk.cd = sk.max * mul;
   }
   function tanjiroStartup(f, base) {
@@ -2727,86 +2750,147 @@
     rings.push({ x: f.x, y: f.y - ichigoBodyH * 0.4, life: 0.8, max: 0.8, color: "rgba(20,20,28,0.75)", r0: 30, r1: 420 });
   }
 
-  // pages31d: 伏黑技能桩（专属帧第2批后补；基础帧可验 idle/run/受击/倒地）
+  // pages31f: 伏黑技能（对照 04_伏黑惠.md）。判定统一在 resolveFushi（hitAt 到点触发）
   function castFushiAtk(f) {
     f.anim = "f_atk";
     f.animT = 0;
-    f.animDur = 0.4;
-    f.busy = 0.36;
+    f.animDur = 0.42;
+    f.busy = 0.38;
     f.hitPending = true;
-    f.hitAt = 0.12;
-    f.meleeDmg = boosted(f, 13);
-    f.meleeRange = fushiBodyW * 1.35;
-    f.meleeLaunch = false;
-    rings.push({ x: f.x + f.facing * fushiBodyW * 0.5, y: f.y - fushiBodyH * 0.45, life: 0.28, max: 0.28, color: "rgba(80,128,255,0.7)", r0: 10, r1: fushiBodyW * 0.75 });
+    f.hitAt = 0.1;
   }
   function castFushiDogs(f) {
     f.anim = "f_dogs";
     f.animT = 0;
     f.animDur = 0.9;
     f.busy = 0.9;
-    f.armor = Math.max(f.armor || 0, 0.2);
+    f.hyperArmor = Math.max(f.hyperArmor || 0, 0.2);
     f.hitPending = true;
-    f.hitAt = 0.35;
-    f.meleeDmg = boosted(f, 22);
-    f.meleeRange = 280;
-    f.meleeLaunch = false;
-    f.dashT = 0.55;
-    f.dashVx = f.facing * 420;
-    rings.push({ x: f.x + f.facing * 80, y: f.y - 20, life: 0.55, max: 0.55, color: "rgba(40,40,60,0.65)", r0: 12, r1: 70 });
+    f.hitAt = 0.2;
+    f.fushiDogsT = 0;
+    f.fushiDogsHit = {};
   }
   function castFushiNue(f) {
-    var dir = f.facing < 0 ? -1 : 1;
     f.anim = "f_nue";
     f.animT = 0;
-    f.animDur = 0.55;
-    f.busy = 0.45;
-    f.hitPending = false;
-    projectiles.push({
-      kind: "wave",
-      x: f.x + dir * 40,
-      y: f.y - fushiBodyH * 0.55,
-      vx: dir * 520,
-      vy: 0,
-      r: 18,
-      dmg: boosted(f, 22),
-      owner: f.id,
-      life: 0.95,
-      color: "#80a0ff"
-    });
-    rings.push({ x: f.x + dir * 55, y: f.y - fushiBodyH * 0.5, life: 0.3, max: 0.3, color: "#5080ff", r0: 8, r1: 52 });
+    f.animDur = 0.6;
+    f.busy = 0.5;
+    f.hitPending = true;
+    f.hitAt = 0.25;
   }
   function castFushiElephant(f) {
     f.anim = "f_elephant";
     f.animT = 0;
-    f.animDur = 1.0;
-    f.busy = 1.0;
-    f.armor = Math.max(f.armor || 0, 0.3);
+    f.animDur = 1.3;
+    f.busy = 1.3;
+    f.hyperArmor = Math.max(f.hyperArmor || 0, 0.3);
     f.hitPending = true;
-    f.hitAt = 0.35;
-    f.meleeDmg = boosted(f, 20);
-    f.meleeRange = 320;
-    f.meleeLaunch = false;
-    rings.push({ x: f.x + f.facing * 140, y: f.y - fushiBodyH * 0.35, life: 1.0, max: 1.0, color: "rgba(100,160,255,0.45)", r0: 20, r1: 110 });
+    f.hitAt = 0.3;
+    f.fushiWaterT = 0;
+    f.fushiWaterHit = {};
   }
   function castFushiShadow(f) {
     f.anim = "f_shadow";
     f.animT = 0;
-    f.animDur = 0.28;
-    f.busy = 0.28;
-    f.invuln = Math.max(f.invuln || 0, 0.2);
-    f.hitPending = false;
-    f.x += f.facing * 160;
-    var lim = xLimits(f.y);
-    f.x = clamp(f.x, lim.min, lim.max);
-    rings.push({ x: f.x, y: f.y - 10, life: 0.35, max: 0.35, color: "rgba(20,20,40,0.7)", r0: 8, r1: 48 });
+    f.animDur = 0.42;
+    f.busy = 0.36;
+    f.hitPending = true;
+    f.hitAt = 0.08;
+    f.fushiShadowMoved = false;
+  }
+  function fushiInBox(f, t, x0, x1, halfDepth) {
+    var dir = f.facing < 0 ? -1 : 1;
+    var rel = (t.x - f.x) * dir;
+    return rel >= x0 && rel <= x1 && Math.abs(t.y - f.y) <= halfDepth;
+  }
+  function resolveFushi(f) {
+    var foes = livingEnemies(f), i, t;
+    var dir = f.facing < 0 ? -1 : 1;
+    if (f.anim === "f_atk") {
+      // 影刺：身前 ≈110px，单段，不耗蓝
+      for (i = 0; i < foes.length; i++) {
+        t = foes[i];
+        if (fushiInBox(f, t, -10, 110, 60)) hurt(t, boosted(f, 9), f.palette.glow, { attacker: f });
+      }
+    } else if (f.anim === "f_dogs") {
+      // 玉犬：前摇 0.2s 后犬冲 0.7s，路径 ≈280px，咬中盒 ≈90px（每目标一次）
+      f.fushiDogsT = 0.7;
+    } else if (f.anim === "f_nue") {
+      // 鵺：前摇 0.25s 吐电球，最远 ≈480px
+      projectiles.push({
+        kind: "wave",
+        x: f.x + dir * 50,
+        y: f.y - fushiBodyH * 0.55,
+        vx: dir * 560,
+        vy: 0,
+        r: 20,
+        dmg: boosted(f, 16),
+        owner: f.id,
+        life: 430 / 560,
+        color: "#9ad0ff"
+      });
+      rings.push({ x: f.x + dir * 55, y: f.y - fushiBodyH * 0.55, life: 0.3, max: 0.3, color: "#9ad0ff", r0: 8, r1: 46 });
+    } else if (f.anim === "f_elephant") {
+      // 满象：起手 0.3s 后喷水 1.0s，水柱 ≈320×80px；命中击退 + 移速×0.5 持续 1.5s
+      f.fushiWaterT = 1.0;
+    } else if (f.anim === "f_shadow") {
+      // 影换：0.08s 没入，0.2s 无敌，面朝方向位移 ≈160px
+      f.invuln = Math.max(f.invuln || 0, 0.2);
+      f.fushiShadowAt = 0.2;
+    }
+  }
+  function updateFushiSkills(f, dt) {
+    var foes, i, t, dir = f.facing < 0 ? -1 : 1;
+    if ((f.fushiDogsT || 0) > 0) {
+      f.fushiDogsT = Math.max(0, f.fushiDogsT - dt);
+      var reach = 280 * (1 - f.fushiDogsT / 0.7);
+      foes = livingEnemies(f);
+      for (i = 0; i < foes.length; i++) {
+        t = foes[i];
+        if (f.fushiDogsHit[t.id]) continue;
+        if (fushiInBox(f, t, 0, Math.max(90, reach + 45), 45)) {
+          if (hurt(t, boosted(f, fushiDomainMul(f, t, 14)), f.palette.glow, { attacker: f })) f.fushiDogsHit[t.id] = true;
+        }
+      }
+      if (f.anim !== "f_dogs") f.fushiDogsT = 0;
+    }
+    if ((f.fushiWaterT || 0) > 0) {
+      f.fushiWaterT = Math.max(0, f.fushiWaterT - dt);
+      foes = livingEnemies(f);
+      for (i = 0; i < foes.length; i++) {
+        t = foes[i];
+        if (f.fushiWaterHit[t.id]) continue;
+        if (fushiInBox(f, t, 0, 320, 40)) {
+          if (hurt(t, boosted(f, fushiDomainMul(f, t, 10)), "#9ad0ff", { attacker: f, heavy: true })) {
+            f.fushiWaterHit[t.id] = true;
+            t.fushiSlowT = 1.5;
+            spawnFloater(t.x, t.y - 196, "减速", "#9ad0ff");
+          }
+        }
+      }
+      if (f.anim !== "f_elephant") f.fushiWaterT = 0;
+    }
+    if (f.anim === "f_shadow" && !f.fushiShadowMoved && f.fushiShadowAt != null && f.animT >= f.fushiShadowAt) {
+      f.fushiShadowMoved = true;
+      var spot = clampSpot(f.x + dir * 160, f.y);
+      f.x = clamp(spot.x, 70, W - 70);
+      f.y = spot.y;
+    }
+  }
+  function fushiDomainMul(f, t, dmg) {
+    // 嵌合庭内式神伤害 ×1.4
+    if ((f.domainT || 0) > 0) {
+      var dx = t.x - f.x, dy = t.y - f.y;
+      if (dx * dx + dy * dy < 320 * 320) return Math.round(dmg * 1.4);
+    }
+    return dmg;
   }
   function castFushiDomain(f) {
     f.anim = "f_domain";
     f.animT = 0;
     f.animDur = 0.45;
     f.busy = 0.45;
-    f.armor = Math.max(f.armor || 0, 0.4);
+    f.hyperArmor = Math.max(f.hyperArmor || 0, 0.45);
     f.hitPending = false;
     f.domainT = 5;
     f.chakraLock = Math.max(f.chakraLock || 0, 5);
@@ -3276,6 +3360,7 @@
   }
 
   function resolveMelee(f) {
+    if (isFushiguro(f) && f.anim && f.anim.indexOf("f_") === 0) { resolveFushi(f); return; }
     var opp = other(f);
     var dx = opp.x - f.x;
     var dy = opp.y - f.y;
@@ -3366,7 +3451,10 @@
     f.gait = "run";
     var len = Math.sqrt(ix * ix + iy * iy);
     var speed = f.moveSpeed || (isObito(f) ? 546 : 437);
+    if ((f.fushiSlowT || 0) > 0) speed *= 0.5; // pages31f: 满象命中减速
     var step = clampSpot(f.x + ix / len * speed * dt, f.y + iy / len * speed * dt);
+    // pages31f: 顶墙/被挡住原地不动时不播跑步（避免松键前后卡跑姿）
+    if (Math.abs(step.x - f.x) + Math.abs(step.y - f.y) < speed * dt * 0.05) f.gait = "idle";
     f.x = step.x;
     f.y = step.y;
   }
@@ -3640,8 +3728,40 @@
         if (f.x > W - KNOCK_EDGE) { f.x = W - KNOCK_EDGE; if (f.launchVx > 0) f.launchVx = 0; if (f.hitPushVx > 0) f.hitPushVx = 0; }
       }
     }
+    if (matchState === "fight") separateBodies(dt);
   }
   var KNOCK_EDGE = 220;
+  // pages31f: 身体不重叠（所有角色）。2.5D 纵深差 < SEP_DY 且横向 < SEP_DX 视为叠人
+  // （含"站在对方头上"），沿 x 平滑推开；一方贴边则只推另一方向内侧。飞行/冲刺/虚化不推。
+  var SEP_DX = 68, SEP_DY = 150, SEP_SPEED = 720;
+  function fighterXLimits(f) {
+    var e = (isAirborne(f) || isDowned(f) || f.knockPhase === "air" || f.knockPhase === "down") ? KNOCK_EDGE : 70;
+    return { lo: e, hi: W - e };
+  }
+  function separateBodies(dt) {
+    var fs = activeFighters(), i, j, a, b;
+    for (i = 0; i < fs.length; i++) {
+      for (j = i + 1; j < fs.length; j++) {
+        a = fs[i]; b = fs[j];
+        if (!a || !b || a.hp <= 0 || b.hp <= 0) continue;
+        if (isAirborne(a) || isAirborne(b)) continue;
+        if ((a.dashT || 0) > 0 || (b.dashT || 0) > 0 || (a.phase || 0) > 0 || (b.phase || 0) > 0) continue;
+        var dx = b.x - a.x, dy = b.y - a.y;
+        if (Math.abs(dy) >= SEP_DY || Math.abs(dx) >= SEP_DX) continue;
+        var dir = dx > 0.5 ? 1 : (dx < -0.5 ? -1 : ((a.x + b.x) / 2 > W / 2 ? -1 : 1)); // b 往 dir 侧
+        var need = SEP_DX - Math.abs(dx);
+        var step = Math.min(need, SEP_SPEED * dt);
+        var la = fighterXLimits(a), lb = fighterXLimits(b);
+        var roomA = dir > 0 ? a.x - la.lo : la.hi - a.x; // a 往 -dir 的空间
+        var roomB = dir > 0 ? lb.hi - b.x : b.x - lb.lo; // b 往 dir 的空间
+        var ma = step / 2, mb = step / 2;
+        if (roomA < ma) { mb += ma - Math.max(0, roomA); ma = Math.max(0, roomA); }
+        if (roomB < mb) { ma += mb - Math.max(0, roomB); mb = Math.max(0, roomB); }
+        a.x -= dir * Math.min(ma, Math.max(0, roomA));
+        b.x += dir * Math.min(mb, Math.max(0, roomB));
+      }
+    }
+  }
   function updateCore(dt) {
     // pages23: 切空间 uses wall-clock so simSpeed / low FPS cannot stretch it past 4s.
     if (voidSpace) {
@@ -3863,6 +3983,8 @@
       if (isLuffy(f) && (f.busy > 0 || (f.anim && f.anim.indexOf("l_") === 0))) plantCaster(f);
       if (isIchigo(f) && (f.busy > 0 || (f.anim && f.anim.indexOf("i_") === 0))) plantCaster(f);
       if (isFushiguro(f) && (f.busy > 0 || (f.anim && f.anim.indexOf("f_") === 0))) plantCaster(f);
+      if (isFushiguro(f)) updateFushiSkills(f, dt);
+      if ((f.fushiSlowT || 0) > 0) f.fushiSlowT = Math.max(0, f.fushiSlowT - dt);
       if (isAirborne(f)) {
         f.dashT = 0;
         f.gait = "idle";
@@ -5611,10 +5733,10 @@
   function fushiNativeDir(set) {
     return 1;
   }
-  function drawFushiAt(x, groundY, facing, set, index, alpha, tilt, shakeAmp) {
+  function drawFushiAt(x, groundY, facing, set, index, alpha, tilt, shakeAmp, scaleMul, srcOx) {
     var img = fushiImage(set, index);
     if (!img) return;
-    var sc = fushiScale;
+    var sc = fushiScale * (scaleMul || 1);
     var sx = 0;
     var sy = 0;
     if (shakeAmp && shakeAmp > 0) {
@@ -5631,13 +5753,14 @@
     var nativeDir = fushiNativeDir(set);
     ctx.scale((facing < 0 ? -1 : 1) * nativeDir, 1);
     ctx.globalAlpha = alpha;
-    ctx.drawImage(img, -dw / 2, -dh, dw, dh);
+    ctx.drawImage(img, -dw / 2 + (srcOx || 0) * sc, -dh, dw, dh);
     ctx.restore();
   }
   function drawFushiguro(f) {
     var set = fushiguro.idle;
     var idx = 0;
     var alpha = 1;
+    var skillKey = null;
     var reacting = isAirborne(f) || isDowned(f) || ((f.stun || 0) > 0 && f.hitLight);
     var drawFacing = f.facing;
     if (reacting && (f.hitLeanDir || 0)) {
@@ -5664,9 +5787,19 @@
       set = fushiguro.idle;
       idx = 0;
     } else if (f.anim && f.anim.indexOf("f_") === 0) {
-      // 技能帧第2批未到：播 idle 顶位，保留 busy/判定
-      set = fushiguro.idle;
-      idx = Math.min(7, Math.floor(((f.animT || 0) / Math.max(0.01, f.animDur || 0.4)) * 8));
+      var fkey = { f_atk: "atk", f_dogs: "dogs", f_nue: "nue", f_elephant: "elephant", f_shadow: "shadow" }[f.anim];
+      var fset = fkey ? fushiguro[fkey] : null;
+      var up = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (up < 0) up = 0; if (up > 0.999) up = 0.999;
+      if (fset && fset[0] && fset[0].complete) {
+        set = fset;
+        idx = Math.min(5, Math.floor(up * 6));
+        skillKey = fkey;
+      } else {
+        // 嵌合庭帧未到：idle 顶位
+        set = fushiguro.idle;
+        idx = Math.min(7, Math.floor(up * 8));
+      }
     } else if (f.gait === "run" || f.gait === "walk") {
       set = (fushiguro.run && fushiguro.run[0] && fushiguro.run[0].complete) ? fushiguro.run : fushiguro.idle;
       idx = Math.floor(time * 10) % 8;
@@ -5674,11 +5807,12 @@
       set = fushiguro.idle;
       idx = Math.floor(time * 8) % 8;
     }
-    if (f.invuln > 0 && !isDowned(f) && !isAirborne(f) && Math.sin(time * 40) > 0) alpha *= 0.45;
+    if (f.invuln > 0 && skillKey !== "shadow" && !isDowned(f) && !isAirborne(f) && Math.sin(time * 40) > 0) alpha *= 0.45;
     var drawAir = (f.airH || 0);
     if (f.busy > 0 || (f.anim && f.anim.indexOf("f_") === 0)) drawAir = 0;
-    var tiltUse = (set === fushiguro.hitstun || set === fushiguro.knock) ? 0 : fighterDrawTilt(f);
-    drawFushiAt(f.x, f.y - drawAir, drawFacing, set, idx, alpha, tiltUse, f.hitShake || 0);
+    var tiltUse = (set === fushiguro.hitstun || set === fushiguro.knock || skillKey) ? 0 : fighterDrawTilt(f);
+    var oxArr = skillKey ? fushiFrameOx[skillKey] : null;
+    drawFushiAt(f.x, f.y - drawAir, drawFacing, set, idx, alpha, tiltUse, f.hitShake || 0, skillKey ? fushiSkillScale : 1, oxArr ? (oxArr[idx] || 0) : 0);
     if ((f.domainT || 0) > 0) {
       var pulse = 0.55 + 0.45 * Math.sin(time * 8);
       ctx.save();
@@ -7020,6 +7154,21 @@
       practiceAutoAttack = !practiceAutoAttack;
       practiceDummy = !practiceAutoAttack;
     });
+    var curAi = (aiFighter() || right).kit;
+    var curAiDef = KIT_DEFS[curAi];
+    flowButton(bx + 224, by + 12, 148, 28, "对手：" + (curAiDef ? curAiDef.name : curAi) + " ▸", false, function () {
+      // 轮换到下一个已解锁角色（跳过自己），立即重开练习
+      var ids = unlockedKitIds(), me = selectedChar || (humanFighter() || left).kit, k, at = ids.indexOf(curAi), nx = null;
+      for (k = 1; k <= ids.length; k++) {
+        var c = ids[(at + k) % ids.length];
+        if (c !== me) { nx = c; break; }
+      }
+      if (!nx) return;
+      practiceAiPick = nx;
+      window.__DUEL_AIKIT__ = null;
+      practicePanel = false;
+      beginMatch();
+    });
     flowButton(bx + pw - 220, by + 12, 100, 28, "重选角色", false, function () {
       practicePanel = false;
       goCharSelect();
@@ -7454,9 +7603,9 @@
     // pages31e: 4 列（7 角色两排），网格不压通灵栏
     var cols = Math.max(3, Math.ceil(charRoster.length / 2));
     var cardW = 124;
-    var cardH = 168;
+    var cardH = 160;
     var gapX = 14;
-    var gapY = 10;
+    var gapY = 8;
     var gridW = cols * cardW + (cols - 1) * gapX;
     var startX = (W - gridW) / 2;
     var startY = 98;
@@ -7487,7 +7636,7 @@
       }
     }
 
-    drawScrollPicker(500, "vs");
+    drawScrollPicker(512, "vs");
 
     var can = vsCanConfirm() && vsScrollReady();
     ctx.font = "13px sans-serif";
