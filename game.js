@@ -70,7 +70,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 30s stall → retry UI.
-  var ASSET_V = "pages31d";
+  var ASSET_V = "pages31e";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [], ichigo: [], fushiguro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 6;
@@ -3356,6 +3356,11 @@
     // Skill casts still face the foe elsewhere; do not snap here.
     if (ix === 0 && iy === 0) {
       f.gait = "idle";
+      // pages31e: 停步/空闲立即面向对手（技能中不打断）
+      if (!(f.busy > 0) && !(f.dashT > 0) && !(f.counterT > 0) && !(f.ult2Phase > 0)) {
+        var foeIdle = nearestEnemy(f);
+        if (foeIdle && foeIdle !== f && Math.abs(foeIdle.x - f.x) > 4) f.facing = foeIdle.x >= f.x ? 1 : -1;
+      }
       return;
     }
     f.gait = "run";
@@ -3629,8 +3634,14 @@
       if (f.x > W - 70) { f.x = W - 70; if (f.hitPushVx > 0) f.hitPushVx = 0; if (f.launchVx > 0) f.launchVx = 0; if (f.dashVx > 0) f.dashVx = 0; }
       if (f.y < 430) f.y = 430;
       if (f.y > 690) f.y = 690;
+      // pages31e: 击飞飞行/倒地/起身时横躺姿态更宽，边距放大到整个人物可见（所有角色）
+      if (isAirborne(f) || isDowned(f) || f.knockPhase === "air" || f.knockPhase === "down") {
+        if (f.x < KNOCK_EDGE) { f.x = KNOCK_EDGE; if (f.launchVx < 0) f.launchVx = 0; if (f.hitPushVx < 0) f.hitPushVx = 0; }
+        if (f.x > W - KNOCK_EDGE) { f.x = W - KNOCK_EDGE; if (f.launchVx > 0) f.launchVx = 0; if (f.hitPushVx > 0) f.hitPushVx = 0; }
+      }
     }
   }
+  var KNOCK_EDGE = 220;
   function updateCore(dt) {
     // pages23: 切空间 uses wall-clock so simSpeed / low FPS cannot stretch it past 4s.
     if (voidSpace) {
@@ -7440,7 +7451,8 @@
     drawVsSlot(56, 100, slotW, slotH, "L", selectedL);
     drawVsSlot(W - 56 - slotW, 100, slotW, slotH, "R", selectedR);
 
-    var cols = 3;
+    // pages31e: 4 列（7 角色两排），网格不压通灵栏
+    var cols = Math.max(3, Math.ceil(charRoster.length / 2));
     var cardW = 124;
     var cardH = 168;
     var gapX = 14;
@@ -7514,7 +7526,8 @@
     ctx.fillStyle = "rgba(200,220,230,0.8)";
     ctx.fillText("先点角色卡，再点底部通灵栏，然后开始。对手自动是另一位解锁角色。", W / 2, 92);
 
-    var cols = 3;
+    // pages31e: 4 列（7 角色两排），网格不压通灵栏
+    var cols = Math.max(3, Math.ceil(charRoster.length / 2));
     var cardW = 136;
     var cardH = 176;
     var gapX = 18;
