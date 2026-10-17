@@ -70,7 +70,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
-  var ASSET_V = "pages30";
+  var ASSET_V = "pages30b";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 8;
@@ -3817,8 +3817,16 @@
       }
     }
     var phased = f.phase > 0;
-    if (phased) alpha = 0.45;
-    else if (f.anim !== "tele" && f.invuln > 0 && !isDowned(f) && !isAirborne(f) && Math.sin(time * 40) > 0) alpha *= 0.45;
+    var knocking = set === obito.knock;
+    // pages30: knockdown/air knock must stay fully opaque (no 虚化/invuln blink ghost)
+    if (knocking) {
+      alpha = 1;
+      phased = false;
+    } else if (phased) {
+      alpha = 0.45;
+    } else if (f.anim !== "tele" && f.invuln > 0 && !isDowned(f) && !isAirborne(f) && !(f.knockPhase) && Math.sin(time * 40) > 0) {
+      alpha *= 0.45;
+    }
     if (phased && phaseSlow > 0) {
       var bodyFrame = obitoImage(set, idx);
       var bodyH = bodyFrame ? bodyFrame.height * obitoScale : 280;
@@ -3833,8 +3841,11 @@
       var ipad = obitoIdleFootPads[idx];
       if (ipad == null) ipad = obitoIdleFootPads[0];
       footDrop = (ipad - obitoIdleFootPads[0]) * obitoScale;
+    } else if (knocking) {
+      // pages30: knock frames share idle canvas; plant soles like idle
+      footDrop = 0;
     }
-    drawObitoAt(f.x, f.y - (f.airH || 0), f.facing, set, idx, alpha, phased, footDrop, fighterDrawTilt(f), f.hitShake || 0);
+    drawObitoAt(f.x, f.y - (f.airH || 0), f.facing, set, idx, alpha, phased, footDrop, knocking ? 0 : fighterDrawTilt(f), knocking ? 0 : (f.hitShake || 0));
   }
 
   function drawGroundShadow(f) {
@@ -5285,7 +5296,31 @@
     ctx.fillStyle = paused ? "#3a2208" : "#f4efe6";
     ctx.fillRect(cx - 7, cy - 7, 4, 14);
     ctx.fillRect(cx + 3, cy - 7, 4, 14);
-    addHit(cx - r, cy - r, r * 2, r * 2, function () { paused = !paused; if (paused) fightClockPause(); else if (matchState === "fight") fightClockResume();; });
+    addHit(cx - r, cy - r, r * 2, r * 2, function () {
+      paused = !paused;
+      if (paused) fightClockPause();
+      else if (matchState === "fight") fightClockResume();
+    });
+    // pages30: while paused, show 「返回」 to leave combat immediately
+    if (paused && (matchState === "fight" || matchState === "countdown" || matchState === "roundEnd")) {
+      var mw = 88, mh = 34;
+      var mx = cx - mw / 2, my = cy - r - mh - 10;
+      if (my < 8) my = cy + r + 10;
+      ctx.fillStyle = "rgba(20,14,10,0.88)";
+      roundRect(mx, my, mw, mh, 6);
+      ctx.fill();
+      ctx.strokeStyle = "#e6c27a";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.font = "bold 16px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#fff8f0";
+      ctx.fillText("返回", mx + mw / 2, my + 23);
+      addHit(mx, my, mw, mh, function () {
+        paused = false;
+        goMode();
+      });
+    }
   }
 
   function drawSpeedChip(x, y, sp) {
