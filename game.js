@@ -70,7 +70,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
-  var ASSET_V = "pages30g";
+  var ASSET_V = "pages30h";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 8;
@@ -87,7 +87,7 @@
 
   // pages24: mirror hosts. Each file is pinned to one host (round-robin) so the browser
   // opens several independent connections; a retry moves the file to the next host.
-  var ASSET_COMMIT = "f836d12e80786d25a401af608c1f9e754e12cbd7";
+  var ASSET_COMMIT = "c2800337959a658888d1bd9887b135cd4c8d72eb";
   var MIRRORS = [""].concat(ASSET_COMMIT.indexOf("__") === 0 ? [] : [
     "https://cdn.jsdelivr.net/gh/dengliangliang25-jpg/naruto-duel-demo@" + ASSET_COMMIT + "/",
     "https://gcore.jsdelivr.net/gh/dengliangliang25-jpg/naruto-duel-demo@" + ASSET_COMMIT + "/",
@@ -430,13 +430,16 @@
       cardImgs[ids[i]] = img;
     }
   })();
+  // pages30h: 通灵栏 = 4 密卷 + 熊猫通灵（同一 picker）
   var SCROLL_DEFS = [
     { id: "scroll_quake", name: "霸体", role: "密卷", color: "#e07030", icon: "icons/icon_01.png", max: 18.2, cost: 18, dmg: 0 },
     { id: "scroll_bolt", name: "回蓝", role: "密卷", color: "#40c0ff", icon: "icons/icon_02.png", max: 20.8, cost: 0, dmg: 0 },
     { id: "scroll_blade", name: "清CD", role: "密卷", color: "#f0c040", icon: "icons/icon_03.png", max: 23.4, cost: 12, dmg: 0 },
-    { id: "scroll_gale", name: "驱散", role: "密卷", color: "#5080ff", icon: "icons/icon_04.png", max: 15.6, cost: 16, dmg: 0 }
+    { id: "scroll_gale", name: "驱散", role: "密卷", color: "#5080ff", icon: "icons/icon_04.png", max: 15.6, cost: 16, dmg: 0 },
+    { id: "summon_panda", name: "熊猫", role: "通灵", color: "#f0e8d8", icon: "icons/summon_panda.png", body: "icons/summon_panda_body.png", max: 16.0, cost: 14, dmg: 28 }
   ];
   var scrollImgs = {};
+  var pandaBodyImg = null;
   (function loadScrolls() {
     var i;
     for (i = 0; i < SCROLL_DEFS.length; i++) {
@@ -444,7 +447,13 @@
       enqueue(img, "core");
       scrollImgs[SCROLL_DEFS[i].id] = img;
     }
+    pandaBodyImg = regImg(new Image(), "icons/summon_panda_body.png", "core", "core");
+    enqueue(pandaBodyImg, "core");
   })();
+  function isTongLingId(id) {
+    var s = String(id || "");
+    return s.indexOf("scroll_") === 0 || s.indexOf("summon_") === 0;
+  }
   function scrollById(id) {
     var i;
     for (i = 0; i < SCROLL_DEFS.length; i++) if (SCROLL_DEFS[i].id === id) return SCROLL_DEFS[i];
@@ -908,12 +917,12 @@
   }
 
   // pages20: fixed slots on both sides. Non-scroll skills fill slots 0..5 in order;
-  // the 密卷 always sits on slot 6 (left B / right L) for every kit.
+  // the 通灵 (密卷/召唤) always sits on slot 6 (left B / right L) for every kit.
   var SLOT_LABELS = { L: ["Q", "E", "R", "F", "C", "V", "B"], R: ["U", "I", "O", "P", "J", "K", "L"] };
   function slotIndexFor(order, i) {
-    if (String(order[i]).indexOf("scroll_") === 0) return 6;
+    if (isTongLingId(order[i])) return 6;
     var n = 0, j;
-    for (j = 0; j < i; j++) if (String(order[j]).indexOf("scroll_") !== 0) n++;
+    for (j = 0; j < i; j++) if (!isTongLingId(order[j])) n++;
     return n;
   }
   function labelSide(f, order, side) {
@@ -945,12 +954,12 @@
   function attachScrollSkill(f, orderArr, scrollId, keyLabel) {
     var def = scrollById(scrollId);
     if (!def) return orderArr;
-    // Drop any previous scroll skill ids from order/skills
+    // Drop any previous 通灵 skill ids from order/skills
     var cleaned = [];
     var i, sid;
     for (i = 0; i < orderArr.length; i++) {
       sid = orderArr[i];
-      if (sid.indexOf("scroll_") === 0) {
+      if (isTongLingId(sid)) {
         delete f.skills[sid];
       } else {
         cleaned.push(sid);
@@ -1744,6 +1753,7 @@
     var k, im;
     for (k in cardImgs) { im = cardImgs[k]; if (!im._ok && !im._err) return false; }
     for (k in scrollImgs) { im = scrollImgs[k]; if (!im._ok && !im._err) return false; }
+    if (pandaBodyImg && !pandaBodyImg._ok && !pandaBodyImg._err) return false;
     return true;
   }
   // pages26: phone mode
@@ -1863,7 +1873,7 @@
     else if (id === "water1") castTanjiroWater1(f);
     else if (id === "ult1") castTanjiroUlt1(f);
     else if (id === "ult2") castTanjiroUlt2(f);
-    else if (id.indexOf("scroll_") === 0) castScroll(f, id);
+    else if (isTongLingId(id)) castScroll(f, id);
   }
 
   // pages25: a press made while the fighter is still finishing a move is kept for 0.35s and
@@ -2040,7 +2050,7 @@
     f.animDur = 0.42;
     f.busy = 0.28;
     f.hitPending = false;
-    spawnFloater(f.x, f.y - 170, (def && def.name) || "密卷", color);
+    spawnFloater(f.x, f.y - 170, (def && def.name) || "通灵", color);
     bursts.push({
       x: f.x + f.facing * 24,
       y: f.y - 90,
@@ -2078,7 +2088,7 @@
       var ck;
       for (ck in f.skills) {
         if (ck === id) continue;
-        if (String(ck).indexOf("scroll_") === 0) continue;
+        if (isTongLingId(ck)) continue;
         f.skills[ck].cd = 0;
       }
       rings.push({ x: f.x, y: f.y - 40, life: 0.45, max: 0.45, color: color, r0: 16, r1: 150 });
@@ -2117,6 +2127,31 @@
           life: 0.35, max: 0.35, kind: "impact", facing: opp.facing || 1, scale: 1.5
         });
       }
+    } else if (id === "summon_panda") {
+      // pages30h: 熊猫从上垂直落下，落地砸一下后消失
+      var landX = f.x + f.facing * 130;
+      var landY = f.y - 40;
+      if (opp && opp.hp > 0) {
+        landX = opp.x;
+        landY = opp.y - 40;
+      }
+      spawnFloater(f.x, f.y - 190, "通灵·熊猫", color);
+      projectiles.push({
+        kind: "panda_drop",
+        x: landX,
+        y: -60,
+        vx: 0,
+        vy: 980,
+        landY: landY,
+        r: 78,
+        dmg: (def && def.dmg) || 28,
+        owner: f.id,
+        life: 2.8,
+        age: 0,
+        hit: false,
+        landed: false,
+        scale: 1
+      });
     }
   }
 
@@ -3206,6 +3241,35 @@
           } else if (hurt(targetFb, p.dmg, ownerFb.palette.glow, { attacker: ownerFb })) {
             p.hit = true;
             rings.push({ x: targetFb.x, y: targetFb.y, life: 0.28, max: 0.28, color: "#ff8a3a" });
+          }
+        }
+        if (p.life <= 0) projectiles.splice(i, 1);
+        continue;
+      }
+      if (p.kind === "panda_drop") {
+        p.age = (p.age || 0) + dt;
+        if (!p.landed) {
+          p.y += (p.vy || 980) * dt;
+          if (p.y >= (p.landY != null ? p.landY : 490)) {
+            p.y = p.landY != null ? p.landY : 490;
+            p.landed = true;
+            p.vy = 0;
+            p.life = Math.min(p.life, 0.55);
+            rings.push({ x: p.x, y: p.y + 30, life: 0.4, max: 0.4, color: "#f0e8d8", r0: 20, r1: 140 });
+            bursts.push({ x: p.x, y: p.y + 20, life: 0.35, max: 0.35, kind: "impact", facing: 1, scale: 1.8 });
+            var ownerPd = projectileOwner(p.owner);
+            var foesPd = livingEnemies(ownerPd);
+            var pi;
+            for (pi = 0; pi < foesPd.length; pi++) {
+              var tgt = foesPd[pi];
+              if (tgt.phase > 0 || tgt.invuln > 0) continue;
+              if (planarDist(p.x, p.y, tgt.x, tgt.y - 60) < (p.r || 78)) {
+                if (hurt(tgt, p.dmg || 28, ownerPd.palette.glow, { attacker: ownerPd })) {
+                  p.hit = true;
+                  spawnFloater(tgt.x, tgt.y - 160, "通灵砸", "#f0e8d8");
+                }
+              }
+            }
           }
         }
         if (p.life <= 0) projectiles.splice(i, 1);
@@ -4337,6 +4401,27 @@
   }
 
   function drawOneProjectile(p) {
+      if (p.kind === "panda_drop") {
+        var pImg = pandaBodyImg;
+        if (pImg && pImg.complete && pImg.naturalWidth > 0) {
+          var bob = p.landed ? Math.sin((p.age || 0) * 18) * 3 : 0;
+          var sc = 0.72 * (p.scale || 1);
+          var dw = pImg.naturalWidth * sc;
+          var dh = pImg.naturalHeight * sc;
+          ctx.save();
+          ctx.globalAlpha = p.landed ? Math.max(0.25, Math.min(1, (p.life || 0) / 0.35)) : 1;
+          ctx.drawImage(pImg, p.x - dw / 2, p.y - dh / 2 + bob, dw, dh);
+          ctx.restore();
+        } else {
+          ctx.save();
+          ctx.fillStyle = "rgba(240,232,216,0.95)";
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, 42, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+        return;
+      }
       if (p.kind === "firebreath") {
         var fbFrames = obito.firebreath;
         var fps = p.fps || 20;
@@ -5758,23 +5843,23 @@
   }
 
   function drawScrollPicker(y, mode) {
-    // mode: "solo" | "vs"
+    // mode: "solo" | "vs" — pages30h: 通灵栏（密卷 + 熊猫）
     var i;
-    var iconR = 34;
-    var gap = 22;
+    var iconR = 30;
+    var gap = 16;
     var n = SCROLL_DEFS.length;
     var totalW = n * (iconR * 2) + (n - 1) * gap;
     var startX = (W - totalW) / 2 + iconR;
     ctx.textAlign = "center";
     ctx.font = "bold 16px sans-serif";
     ctx.fillStyle = "#f4fbff";
-    ctx.fillText("密卷", W / 2, y - 34);
+    ctx.fillText("通灵栏", W / 2, y - 34);
     ctx.font = "12px sans-serif";
     ctx.fillStyle = "rgba(200,220,230,0.75)";
     if (mode === "vs") {
-      ctx.fillText("密卷：霸体 / 回蓝 / 清CD / 驱散 · 先赋左再赋右", W / 2, y - 16);
+      ctx.fillText("通灵：霸体 / 回蓝 / 清CD / 驱散 / 熊猫 · 先赋左再赋右", W / 2, y - 16);
     } else {
-      ctx.fillText("密卷：霸体4秒 · 回蓝锁满10秒 · 清CD · 驱散(僵直+破霸体)", W / 2, y - 16);
+      ctx.fillText("通灵：密卷四选一，或熊猫通灵（落下砸击）", W / 2, y - 16);
     }
     for (i = 0; i < n; i++) {
       var def = SCROLL_DEFS[i];
@@ -5917,8 +6002,8 @@
     var can = vsCanConfirm() && vsScrollReady();
     ctx.font = "13px sans-serif";
     ctx.fillStyle = can ? "rgba(180,255,220,0.9)" : "rgba(255,180,140,0.9)";
-    var tip = "请为左右各选不同角色与密卷";
-    if (vsCanConfirm() && !vsScrollReady()) tip = "角色已选，请再为左右各选密卷";
+    var tip = "请为左右各选不同角色与通灵";
+    if (vsCanConfirm() && !vsScrollReady()) tip = "角色已选，请再为左右各选通灵";
     else if (can) tip = "可以开始对战";
     ctx.fillText(tip, W / 2, H - 78);
 
@@ -5946,10 +6031,10 @@
     ctx.textAlign = "center";
     ctx.font = "bold 30px sans-serif";
     ctx.fillStyle = "#f4fbff";
-    ctx.fillText("选择角色与密卷", W / 2, 68);
+    ctx.fillText("选择角色与通灵", W / 2, 68);
     ctx.font = "13px sans-serif";
     ctx.fillStyle = "rgba(200,220,230,0.8)";
-    ctx.fillText("先点角色卡，再点底部密卷，然后开始。对手自动是另一位解锁角色。", W / 2, 92);
+    ctx.fillText("先点角色卡，再点底部通灵栏，然后开始。对手自动是另一位解锁角色。", W / 2, 92);
 
     var cols = 3;
     var cardW = 136;
@@ -5980,7 +6065,7 @@
     var can = !!(selectedChar && selectedScroll);
     ctx.font = "13px sans-serif";
     ctx.fillStyle = can ? "rgba(180,255,220,0.9)" : "rgba(255,180,140,0.9)";
-    ctx.fillText(can ? "角色与密卷已选，可以开始" : "请选择角色和一卷密卷", W / 2, H - 78);
+    ctx.fillText(can ? "角色与通灵已选，可以开始" : "请选择角色和一项通灵", W / 2, H - 78);
 
     flowButton(40, H - 58, 120, 38, "返回", false, function () { goMode(); });
     flowButton(W / 2 - 100, H - 64, 200, 46, "开始对战", can, function () {
