@@ -67,7 +67,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
-  var ASSET_V = "pages26";
+  var ASSET_V = "pages27";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 8;
@@ -1736,7 +1736,7 @@
   }
   // pages26: phone mode
   var mobileMode = (function () {
-    try { var v = localStorage.getItem("duelDevice"); if (v === "mobile") return true; if (v === "pc") return false; } catch (e) {}
+    try { localStorage.removeItem("duelDevice"); var v = localStorage.getItem("duelDeviceManual"); if (v === "mobile") return true; if (v === "pc") return false; } catch (e) {}
     var ua = navigator.userAgent || "";
     var coarse = !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches);
     var touch = ("ontouchstart" in window) || (navigator.maxTouchPoints || 0) > 0;
@@ -1745,7 +1745,7 @@
   })();
   function setMobileMode(on) {
     mobileMode = !!on;
-    try { localStorage.setItem("duelDevice", on ? "mobile" : "pc"); } catch (e) {}
+    try { localStorage.setItem("duelDeviceManual", on ? "mobile" : "pc"); } catch (e) {}
     if (mobileMode && (gameMode === "vs" || gameMode === "coop")) gameMode = "ai";
   }
   function isPortrait() { return mobileMode && window.innerHeight > window.innerWidth; }
@@ -5287,6 +5287,22 @@
     var pw = 600, ph = 160;
     var bx = W / 2 - pw / 2;
     var by = H - 64 - ph;
+    if (mobileMode && practicePanel) {
+      // pages27: centered modal on phones; dim + swallow taps so stick/skills underneath are not hit
+      hudHits = [];
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = "source-over";
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = "rgba(0,0,0,0.6)";
+      ctx.fillRect(0, 0, W, H);
+      ctx.restore();
+      addHit(0, 0, W, H, function () {}, "modalBlock");
+      by = H / 2 - ph / 2;
+      flowButton(W / 2 - 70, by + ph + 14, 140, 40, "关闭设置", true, function () { practicePanel = false; });
+    } else
+
     flowButton(W / 2 - 70, H - 52, 140, 34, practicePanel ? "关闭设置" : "练习设置", true, function () {
       practicePanel = !practicePanel;
     });
@@ -5960,8 +5976,10 @@
       ctx.fillText("显示界面", 70, H - 32);
       addHit(24, H - 52, 92, 30, function () { hudHidden = false; });
     }
-    if (gameMode === "practice") drawPracticePanel();
+    var modalPanel = mobileMode && gameMode === "practice" && practicePanel && matchState === "fight";
+    if (gameMode === "practice" && !modalPanel) drawPracticePanel();
     if (matchState === "fight" || matchState === "countdown" || matchState === "roundEnd") { drawSticks(); if (mobileMode && !hudHidden) drawMobileSkillArc(); }
+    if (modalPanel) drawPracticePanel();
 
     if (matchState === "countdown") {
       ctx.textAlign = "center";
@@ -6356,6 +6374,7 @@
 
   function stickAt(x, y) {
     var i;
+    if (mobileMode && practicePanel && gameMode === "practice" && matchState === "fight") return null;
     layoutSticks();
     for (i = 0; i < (mobileMode ? 1 : sticks.length); i++) {
       var s = sticks[i];
