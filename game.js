@@ -70,7 +70,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
-  var ASSET_V = "pages30i";
+  var ASSET_V = "pages30j";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 8;
@@ -430,7 +430,7 @@
       cardImgs[ids[i]] = img;
     }
   })();
-  // pages30i: 通灵栏 = 4 密卷 + 熊猫 + 鲛鲨（同一 picker）
+  // pages30j: 通灵栏 = 4 密卷 + 熊猫 + 鲛鲨（同一 picker）
   var SCROLL_DEFS = [
     { id: "scroll_quake", name: "霸体", role: "密卷", color: "#e07030", icon: "icons/icon_01.png", max: 18.2, cost: 18, dmg: 0 },
     { id: "scroll_bolt", name: "回蓝", role: "密卷", color: "#40c0ff", icon: "icons/icon_02.png", max: 20.8, cost: 0, dmg: 0 },
@@ -2133,7 +2133,7 @@
         });
       }
     } else if (id === "summon_panda") {
-      // pages30h: 熊猫从上垂直落下，落地砸一下后消失
+      // pages30j: 熊猫从上垂直落下，落地砸一下后消失
       var landX = f.x + f.facing * 130;
       var landY = f.y - 40;
       if (opp && opp.hp > 0) {
@@ -2158,7 +2158,7 @@
         scale: 1
       });
     } else if (id === "summon_shark") {
-      // pages30i: 鲛鲨从上垂直落下（同熊猫）
+      // pages30j: 鲛鲨从上垂直落下（同熊猫）
       var landXs = f.x + f.facing * 130;
       var landYs = f.y - 40;
       if (opp && opp.hp > 0) {
@@ -5874,7 +5874,7 @@
   }
 
   function drawScrollPicker(y, mode) {
-    // mode: "solo" | "vs" — pages30i: 通灵栏（密卷 + 熊猫 + 鲛鲨）
+    // mode: "solo" | "vs" — pages30j: 通灵栏（密卷 + 熊猫 + 鲛鲨）
     var i;
     var iconR = 30;
     var gap = 16;
