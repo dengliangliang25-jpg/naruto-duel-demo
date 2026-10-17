@@ -87,7 +87,7 @@
 
   // pages24: mirror hosts. Each file is pinned to one host (round-robin) so the browser
   // opens several independent connections; a retry moves the file to the next host.
-  var ASSET_COMMIT = "8e9b15b60a217177a9b7103d130ff9948ec8d85c";
+  var ASSET_COMMIT = "b6bf325928373b82a5e48b0adbe7d03e9f455fc1";
   var MIRRORS = [""].concat(ASSET_COMMIT.indexOf("__") === 0 ? [] : [
     "https://cdn.jsdelivr.net/gh/dengliangliang25-jpg/naruto-duel-demo@" + ASSET_COMMIT + "/",
     "https://gcore.jsdelivr.net/gh/dengliangliang25-jpg/naruto-duel-demo@" + ASSET_COMMIT + "/",
