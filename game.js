@@ -70,7 +70,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
-  var ASSET_V = "pages30o";
+  var ASSET_V = "pages30p";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 8;
@@ -405,7 +405,7 @@
       bindArr(tanjiro.hitstun); bindArr(tanjiro.knock);
     } else if (kitId === "gojo") {
       bindArr(gojo.idle); bindArr(gojo.run); bindArr(gojo.hitstun); bindArr(gojo.knock);
-      bindArr(gojo.atk); bindArr(gojo.blue);
+      bindArr(gojo.atk); bindArr(gojo.blue); bindArr(gojo.red);
     }
   }
   function registerKitSheets(kitId) {
@@ -648,14 +648,15 @@
   var tanjiroBodyW = 211 * tanjiroScale;
   var tanjiroBodyH = 360 * tanjiroScale;
 
-  // pages30o: 五条悟 — 基础帧 + 定稿 run + 普攻/苍技能帧
+  // pages30p: 五条悟 — 基础帧 + 定稿 run + 普攻/苍/赫技能帧
   var gojo = {
     idle: loadNumbered("gojo/idle", 8),
     run: loadNumbered("gojo/run", 8),
     hitstun: loadNumbered("gojo/hitstun", 6),
     knock: loadNumbered("gojo/knockdown", 6),
     atk: loadNumbered("gojo/attack", 6),
-    blue: loadNumbered("gojo/skill_ao", 6)
+    blue: loadNumbered("gojo/skill_ao", 6),
+    red: loadNumbered("gojo/skill_aka", 6)
   };
   // canvas 320×436；opaque ~145×390；脚底距底 ~7px；面朝右 → nativeDir +1
   var gojoFootPad = 7;
@@ -4674,8 +4675,13 @@
       var ub = f.animDur > 0 ? f.animT / f.animDur : 1;
       if (ub < 0) ub = 0; if (ub > 0.999) ub = 0.999;
       idx = Math.min(5, Math.floor(ub * 6));
+    } else if (f.anim === "g_red" && gojo.red && gojo.red[0] && gojo.red[0].complete) {
+      set = gojo.red;
+      var ur = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (ur < 0) ur = 0; if (ur > 0.999) ur = 0.999;
+      idx = Math.min(5, Math.floor(ur * 6));
     } else if (f.anim && f.anim.indexOf("g_") === 0) {
-      // other skill stubs (赫/瞬步/无下限/领域) until art lands
+      // other skill stubs (瞬步/无下限/领域) until art lands
       set = gojo.idle;
       idx = Math.min(7, Math.floor(((f.animT || 0) / Math.max(0.01, f.animDur || 0.4)) * 8));
     } else if (f.gait === "run" || f.gait === "walk") {
