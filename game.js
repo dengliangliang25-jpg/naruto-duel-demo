@@ -70,7 +70,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
-  var ASSET_V = "pages30t";
+  var ASSET_V = "pages30u";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 8;
@@ -409,6 +409,7 @@
       bindArr(gojo.infinity); bindArr(gojo.infinityLoop); bindArr(gojo.domain);
     } else if (kitId === "luffy") {
       bindArr(luffy.idle); bindArr(luffy.run); bindArr(luffy.hitstun); bindArr(luffy.knock);
+      bindArr(luffy.atk); bindArr(luffy.gatling); bindArr(luffy.pistol); bindArr(luffy.balloon);
     }
   }
   function registerKitSheets(kitId) {
@@ -671,12 +672,16 @@
   var gojoBodyW = 145 * gojoScale;
   var gojoBodyH = 390 * gojoScale;
 
-  // pages30t: 路飞基础帧 idle/run/hitstun/knock；技能帧后补，先桩
+  // pages30u: 路飞 +技能帧 attack/gatling/pistol/balloon；二档/金刚枪仍桩
   var luffy = {
     idle: loadNumbered("luffy/idle", 8),
     run: loadNumbered("luffy/run", 8),
     hitstun: loadNumbered("luffy/hitstun", 6),
-    knock: loadNumbered("luffy/knockdown", 6)
+    knock: loadNumbered("luffy/knockdown", 6),
+    atk: loadNumbered("luffy/attack", 6),
+    gatling: loadNumbered("luffy/skill_gatling", 6),
+    pistol: loadNumbered("luffy/skill_pistol", 6),
+    balloon: loadNumbered("luffy/skill_balloon", 6)
   };
   // canvas 320×436；面朝右 → nativeDir +1
   var luffyFootPad = 8;
@@ -2390,7 +2395,7 @@
     rings.push({ x: f.x, y: f.y - 40, life: 0.8, max: 0.8, color: "rgba(160,80,255,0.7)", r0: 40, r1: 350 });
   }
 
-  // pages30t: 路飞技能桩（专属帧未到前用 idle + 简易效果）
+  // pages30u: 路飞技能 — atk/gatling/pistol/balloon 有专属帧；gear2/spear 仍桩
   function castLuffyAtk(f) {
     f.anim = "l_atk";
     f.animT = 0;
@@ -4976,8 +4981,28 @@
     } else if (reacting) {
       set = luffy.idle;
       idx = 0;
+    } else if (f.anim === "l_atk" && luffy.atk && luffy.atk[0] && luffy.atk[0].complete) {
+      set = luffy.atk;
+      var ua = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (ua < 0) ua = 0; if (ua > 0.999) ua = 0.999;
+      idx = Math.min(5, Math.floor(ua * 6));
+    } else if (f.anim === "l_gatling" && luffy.gatling && luffy.gatling[0] && luffy.gatling[0].complete) {
+      set = luffy.gatling;
+      var ug = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (ug < 0) ug = 0; if (ug > 0.999) ug = 0.999;
+      idx = Math.min(5, Math.floor(ug * 6));
+    } else if (f.anim === "l_pistol" && luffy.pistol && luffy.pistol[0] && luffy.pistol[0].complete) {
+      set = luffy.pistol;
+      var up = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (up < 0) up = 0; if (up > 0.999) up = 0.999;
+      idx = Math.min(5, Math.floor(up * 6));
+    } else if (f.anim === "l_balloon" && luffy.balloon && luffy.balloon[0] && luffy.balloon[0].complete) {
+      set = luffy.balloon;
+      var ub = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (ub < 0) ub = 0; if (ub > 0.999) ub = 0.999;
+      idx = Math.min(5, Math.floor(ub * 6));
     } else if (f.anim && f.anim.indexOf("l_") === 0) {
-      // 技能帧未到：idle 顶技能动作
+      // pages30u: gear2/spear 等尚无专属帧，idle 顶位
       set = luffy.idle;
       idx = Math.min(7, Math.floor(((f.animT || 0) / Math.max(0.01, f.animDur || 0.4)) * 8));
     } else if (f.gait === "run" || f.gait === "walk") {
