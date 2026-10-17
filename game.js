@@ -70,7 +70,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
-  var ASSET_V = "pages30k";
+  var ASSET_V = "pages30l";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 8;
@@ -2133,7 +2133,7 @@
         });
       }
     } else if (id === "summon_panda") {
-      // pages30k: 熊猫从上垂直落下，落地砸一下后消失；施放者获 4s 霸体
+      // pages30l: 熊猫下落砸击换用户抠图；施放者获 4s 霸体（pages30k）
       var landX = f.x + f.facing * 130;
       var landY = f.y - 40;
       if (opp && opp.hp > 0) {
