@@ -50,9 +50,12 @@
   var matchTime = 60;
   var matchResult = null;
   var gameMode = "ai"; // ai | vs | coop | practice
-  var practiceDummy = false; // pages25: 木桩呆立 is an explicit switch, default OFF (opponent moves + attacks)
-  var practiceNoCdAll = false;
-  var practiceNoCd = {}; // skillId -> bool
+  // pages29: practice defaults — opponent does NOT auto-attack; player can toggle 「自动打我」.
+  // Arrow keys move the right-side sparring partner; panel / UIO… keys force-cast their skills.
+  var practiceAutoAttack = false;
+  var practiceDummy = true; // kept as alias of !practiceAutoAttack for older debug helpers
+  var practiceNoCdAll = false; // retained for debug helpers; UI no longer exposes per-skill CD toggles
+  var practiceNoCd = {}; // skillId -> bool (debug only)
   var practicePanel = false;
   var countdownPhase = "round"; // round | fight
   var playerSide = "L"; // which side the human controls in AI mode
@@ -67,7 +70,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
-  var ASSET_V = "pages28";
+  var ASSET_V = "pages29";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 8;
@@ -84,7 +87,7 @@
 
   // pages24: mirror hosts. Each file is pinned to one host (round-robin) so the browser
   // opens several independent connections; a retry moves the file to the next host.
-  var ASSET_COMMIT = "1909864639e7d796a4cd5dd9c9408570cbb6b700";
+  var ASSET_COMMIT = "__ASSET_COMMIT__";
   var MIRRORS = [""].concat(ASSET_COMMIT.indexOf("__") === 0 ? [] : [
     "https://cdn.jsdelivr.net/gh/dengliangliang25-jpg/naruto-duel-demo@" + ASSET_COMMIT + "/",
     "https://gcore.jsdelivr.net/gh/dengliangliang25-jpg/naruto-duel-demo@" + ASSET_COMMIT + "/",
@@ -399,6 +402,7 @@
       bindArr(tanjiro.water.water4); bindArr(tanjiro.water.water1);
       bindArr(tanjiro.fire.atk); bindArr(tanjiro.fire.water2); bindArr(tanjiro.fire.water2c);
       bindArr(tanjiro.fire.water4); bindArr(tanjiro.fire.water1);
+      bindArr(tanjiro.hitstun); bindArr(tanjiro.knock);
     }
   }
   function registerKitSheets(kitId) {
@@ -614,7 +618,9 @@
       water1: loadNumbered("tanjiro/fire/一型", 6)
     },
     ult1: loadNumbered("tanjiro/ult/一段_变身", 6),
-    ult2: loadNumbered("tanjiro/ult/二段", 6)
+    ult2: loadNumbered("tanjiro/ult/二段", 6),
+    hitstun: loadNumbered("tanjiro/hitstun", 6),
+    knock: loadNumbered("tanjiro/knockdown", 6)
   };
   // Match on-screen body height to Obito (~180 * obitoScale). Source foot line y=380 on 400 canvas.
   var tanjiroScale = (180 * obitoScale) / 360;
@@ -2604,6 +2610,15 @@
       // AI still acts in void space — no special freeze when voidSpace is on.
       ix = f.aiIx || 0;
       iy = f.aiIy || 0;
+      // pages29 practice: arrow keys manually steer the right-side sparring partner.
+      if (gameMode === "practice" && f === aiFighter()) {
+        var pix = 0, piy = 0;
+        if (keysDown.ArrowLeft) pix -= 1;
+        if (keysDown.ArrowRight) pix += 1;
+        if (keysDown.ArrowUp) piy -= 1;
+        if (keysDown.ArrowDown) piy += 1;
+        if (pix !== 0 || piy !== 0) { ix = pix; iy = piy; }
+      }
     } else if (f.id === "L") {
       // Obito: WASD + left stick
       if (keysDown.a) ix -= 1;
@@ -2683,6 +2698,8 @@
     f.aiIy = wantY;
     if (f.busy > 0 || f.dashT > 0 || f.shield > 0 || f.shieldWind > 0) return;
     if (f.aiThink > 0) return;
+    // pages29: practice default = no auto-attack (player triggers enemy skills manually)
+    if (gameMode === "practice" && !practiceAutoAttack) return;
     // pages23: slower AI decision cadence (was 0.18–0.40s).
     f.aiThink = 0.55 + Math.random() * 0.45;
     if (isPain(f)) {
@@ -2770,11 +2787,8 @@
   function updateAI(dt) {
     if (matchState !== "fight" || koId) return;
     if (gameMode === "vs") return;
-    if (gameMode === "practice" && practiceDummy) {
-      var dum = aiFighter();
-      if (dum) { dum.aiIx = 0; dum.aiIy = 0; }
-      return;
-    }
+    // pages29: practice without 「自动打我」 still lets the sparring partner stand/move
+    // (and accept arrow-key steering / forced casts); only auto skill casting is skipped.
     if (gameMode === "coop") {
       updateOneAI(right, dt);
       updateOneAI(right2, dt);
@@ -4048,6 +4062,8 @@
     if (!set) return -1;
     if (set === tanjiro.idle || set === tanjiro.water.atk || set === tanjiro.fire.atk) return -1;
     if (set === tanjiro.water.water2c || set === tanjiro.fire.water2c) return -1;
+    // pages29: 受击僵直 / 击飞帧原生朝右（被击向后=向左）
+    if (set === tanjiro.hitstun || set === tanjiro.knock) return 1;
     // 二型 / 四型 / 一型 / 大招：多数帧朝右
     return 1;
   }
@@ -4104,7 +4120,31 @@
     var alpha = 1;
     var form = tanjiroSet(f);
     var reacting = isAirborne(f) || isDowned(f) || ((f.stun || 0) > 0 && f.hitLight);
-    if (reacting) {
+    var drawFacing = f.facing;
+    // pages29: during hit reaction face away from knock direction so right-facing art recoils backward correctly
+    if (reacting && (f.hitLeanDir || 0)) {
+      drawFacing = (f.hitLeanDir > 0) ? -1 : 1;
+    }
+    if ((f.knockPhase === "air" || isAirborne(f)) && tanjiro.knock && tanjiro.knock[0] && tanjiro.knock[0].complete) {
+      set = tanjiro.knock;
+      // 6 frames: 0 hit · 1-2 air · 3 tumble  — map by knockT
+      var kat = f.knockT || 0;
+      if (kat < 0.08) idx = 0;
+      else if (kat < 0.22) idx = 1;
+      else if (kat < 0.40) idx = 2;
+      else idx = 3;
+    } else if ((f.knockPhase === "down" || isDowned(f)) && tanjiro.knock && tanjiro.knock[0] && tanjiro.knock[0].complete) {
+      set = tanjiro.knock;
+      var kdt = f.knockT || 0;
+      if ((f.getUpT || 0) > 0) idx = 5;
+      else if (kdt < 0.18) idx = 4;
+      else idx = 5;
+    } else if (f.hitLight && (f.stun || 0) > 0 && tanjiro.hitstun && tanjiro.hitstun[0] && tanjiro.hitstun[0].complete) {
+      set = tanjiro.hitstun;
+      // progress through flinch: early frames = impact, later = recover
+      var su = 1 - Math.min(1, (f.stun || 0) / 0.55);
+      idx = Math.min(5, Math.floor(su * 6));
+    } else if (reacting) {
       set = tanjiro.idle;
       idx = 0;
     } else if (f.anim === "t_atk") {
@@ -4164,7 +4204,9 @@
     if (f.fireForm) drawTanjiroFireAura(f, true);
     var drawAir = (f.airH || 0);
     if (f.busy > 0 || (f.ult2Phase || 0) > 0 || (f.counterT || 0) > 0 || (f.anim && f.anim.indexOf("t_") === 0)) drawAir = 0;
-    drawTanjiroAt(f.x + lungeX, f.y - drawAir, f.facing, set, idx, alpha, fighterDrawTilt(f) + swingTilt, f.hitShake || 0);
+    // pages29: hitstun/knockdown skip lean tilt — the art already carries the pose
+    var tiltUse = (set === tanjiro.hitstun || set === tanjiro.knock) ? 0 : (fighterDrawTilt(f) + swingTilt);
+    drawTanjiroAt(f.x + lungeX, f.y - drawAir, drawFacing, set, idx, alpha, tiltUse, f.hitShake || 0);
     if (f.fireForm) drawTanjiroFireAura(f, false);
   }
   // pages25: 火之形态 needs to read at a glance: glow + flickering flame tongues + embers.
@@ -5291,6 +5333,20 @@
     ctx.fillText(String(secs), W / 2, 92);
   }
 
+  function practiceForceCast(skillId) {
+    if (gameMode !== "practice" || matchState !== "fight") return false;
+    var f = aiFighter();
+    if (!f || f.hp <= 0 || !f.skills[skillId]) return false;
+    var sk = f.skills[skillId];
+    sk.cd = 0;
+    if ((sk.cost || 0) > 0) f.chakra = Math.max(f.chakra, sk.cost);
+    // Clear stun so the cast can start immediately for training.
+    f.stun = 0;
+    if (skillId === "spike") shieldPressDown(f);
+    else tryCast(f, skillId);
+    return true;
+  }
+
   function drawPracticePanel() {
     if (gameMode !== "practice" || matchState !== "fight") return;
     var pw = 600, ph = 160;
@@ -5316,25 +5372,20 @@
       practicePanel = !practicePanel;
     });
     if (!practicePanel) return;
+    // pages29: taller panel for enemy skill triggers
+    ph = 188;
+    if (mobileMode) by = H / 2 - ph / 2;
+    else by = H - 64 - ph;
     panelBox(bx, by, pw, ph);
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
     ctx.font = "bold 15px sans-serif";
     ctx.fillStyle = "#f4efe6";
-    ctx.fillText("技能冷却", bx + 16, by + 26);
+    ctx.fillText("练习设置", bx + 16, by + 26);
     ctx.textBaseline = "alphabetic";
-    flowButton(bx + 96, by + 12, 104, 28, practiceNoCdAll ? "全部无CD" : "全部有CD", true, function () {
-      practiceNoCdAll = !practiceNoCdAll;
-      if (practiceNoCdAll) {
-        var f0 = humanFighter();
-        var id0;
-        for (id0 in f0.skills) practiceNoCd[id0] = true;
-      } else {
-        practiceNoCd = {};
-      }
-    });
-    flowButton(bx + 208, by + 12, 104, 28, practiceDummy ? "木桩呆立：开" : "木桩呆立：关", practiceDummy, function () {
-      practiceDummy = !practiceDummy;
+    flowButton(bx + 96, by + 12, 120, 28, practiceAutoAttack ? "自动打我：开" : "自动打我：关", practiceAutoAttack, function () {
+      practiceAutoAttack = !practiceAutoAttack;
+      practiceDummy = !practiceAutoAttack;
     });
     flowButton(bx + pw - 220, by + 12, 100, 28, "重选角色", false, function () {
       practicePanel = false;
@@ -5344,23 +5395,25 @@
       practicePanel = false;
       goMode();
     });
-    var f = humanFighter();
-    var order = (f.id === "L" || f.id === "L2") ? leftOrder : rightOrder;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.font = "13px sans-serif";
+    ctx.fillStyle = "rgba(200,220,230,0.85)";
+    ctx.fillText("敌方技能（点按或按键 → 右边立刻放招；方向键移敌方）", bx + 16, by + 52);
+    ctx.textBaseline = "alphabetic";
+    var fAi = aiFighter() || right;
+    var order = rightOrder;
     var i, n = 0;
     var cols = 4, cw = 138, ch = 30, gx = 6;
     for (i = 0; i < order.length; i++) {
       var sid = order[i];
-      var sk = f.skills[sid];
+      var sk = fAi.skills[sid];
       if (!sk) continue;
-      var on = practiceNoCdAll || practiceNoCd[sid];
       var x = bx + 16 + (n % cols) * (cw + gx);
-      var y = by + 56 + Math.floor(n / cols) * (ch + 8);
+      var y = by + 72 + Math.floor(n / cols) * (ch + 8);
       n++;
-      flowButton(x, y, cw, ch, sk.key + " " + sk.name + (on ? " 无CD" : " 有CD"), on, (function (id) {
-        return function () {
-          practiceNoCdAll = false;
-          practiceNoCd[id] = !practiceNoCd[id];
-        };
+      flowButton(x, y, cw, ch, (sk.key || "?") + " " + sk.name, false, (function (id) {
+        return function () { practiceForceCast(id); };
       })(sid));
     }
   }
@@ -5468,7 +5521,7 @@
     ctx.font = "13px sans-serif";
     ctx.fillStyle = "rgba(180,210,220,0.75)";
     ctx.fillText("联机：P1 WASD + QERF… / P2 方向键 + UIO PJK… 并肩打两名随机人机", W / 2, 430);
-    ctx.fillText("练习：无计时，可单独开关技能冷却；对手可选呆立木桩或简易人机", W / 2, 452);
+    ctx.fillText("练习：左 WASD+技能 · 右方向键移动 · 设置里点敌方技能键放招 · 默认可关自动打我", W / 2, 452);
     flowButton(W / 2 - 90, 470, 180, 44, "返回介绍", false, function () { goIntro(); });
   }
 
@@ -6286,7 +6339,13 @@
     }
     keysDown[k] = true;
     var caster = fighterByOwner(mapped[0]);
-    if (!caster || !humanControls(caster)) return;
+    if (!caster) return;
+    // pages29 practice: U/I/O/P/J/K/L force-cast the right sparring partner (ignore humanControls)
+    if (gameMode === "practice" && mapped[0] === "R" && caster === aiFighter()) {
+      practiceForceCast(mapped[1]);
+      return;
+    }
+    if (!humanControls(caster)) return;
     if (mapped[1] === "spike") shieldPressDown(caster);
     else tryCast(caster, mapped[1]);
   });
@@ -6528,6 +6587,7 @@
       roundBanner: roundBannerText(),
       matchTime: matchTime,
       practiceDummy: practiceDummy,
+      practiceAutoAttack: practiceAutoAttack,
       practiceNoCdAll: practiceNoCdAll,
       selectedL: selectedL,
       selectedR: selectedR,
@@ -6587,6 +6647,7 @@
     selectedChar = me || "obito";
     selectedScroll = SCROLL_DEFS[0].id;
     window.__DUEL_AIKIT__ = ai || null;
+    practiceAutoAttack = false;
     practiceDummy = true;
     practiceNoCdAll = false;
     practiceNoCd = {};
@@ -6612,6 +6673,7 @@
     gameMode = "practice";
     selectedChar = "obito";
     selectedScroll = SCROLL_DEFS[0].id;
+    practiceAutoAttack = false;
     practiceDummy = true;
     practiceNoCdAll = false;
     practiceNoCd = {};
@@ -6622,7 +6684,8 @@
     gameMode = opts.mode || "practice";
     selectedChar = "tanjiro";
     selectedScroll = SCROLL_DEFS[0].id;
-    practiceDummy = true;
+    practiceAutoAttack = !!opts.autoAttack;
+    practiceDummy = !practiceAutoAttack;
     practiceNoCdAll = !!opts.noCd;
     practiceNoCd = {};
     beginMatch();
