@@ -70,7 +70,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
-  var ASSET_V = "pages30z";
+  var ASSET_V = "pages31a";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [], ichigo: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 8;
@@ -413,6 +413,7 @@
       bindArr(luffy.gear2Idle); bindArr(luffy.gear2Run); bindArr(luffy.gear2Atk); bindArr(luffy.spear);
     } else if (kitId === "ichigo") {
       bindArr(ichigo.idle); bindArr(ichigo.run); bindArr(ichigo.hitstun); bindArr(ichigo.knock);
+      bindArr(ichigo.atk); bindArr(ichigo.getsuga); bindArr(ichigo.flash); bindArr(ichigo.block);
     }
   }
   function registerKitSheets(kitId) {
@@ -696,12 +697,16 @@
   var luffyBodyW = 145 * luffyScale;
   var luffyBodyH = 436 * luffyScale;
 
-  // pages30z: 一护基础 — idle/run/hitstun/knock（hitstun 换真帧）
+  // pages31a: 一护 batch2 — +斩月/月牙天冲/瞬步/挡刀；bankai/无月仍 idle 桩
   var ichigo = {
     idle: loadNumbered("ichigo/idle", 8),
     run: loadNumbered("ichigo/run", 8),
     hitstun: loadNumbered("ichigo/hitstun", 6),
-    knock: loadNumbered("ichigo/knockdown", 6)
+    knock: loadNumbered("ichigo/knockdown", 6),
+    atk: loadNumbered("ichigo/attack", 6),
+    getsuga: loadNumbered("ichigo/skill_getsuga", 6),
+    flash: loadNumbered("ichigo/skill_flash", 6),
+    block: loadNumbered("ichigo/skill_block", 6)
   };
   // canvas 320×436；opaque ~307×378；脚底距底 ~8px；面朝右 → nativeDir +1
   var ichigoFootPad = 8;
@@ -2545,7 +2550,7 @@
     rings.push({ x: f.x + f.facing * 120, y: f.y - luffyBodyH * 0.45, life: 0.5, max: 0.5, color: "rgba(255,220,120,0.7)", r0: 12, r1: 90 });
   }
 
-  // pages30y: 一护技能桩（专属帧后补；bankai 查克拉同修好的二档：tryCast 减半一次、−8/s、无 chakraLock=999）
+  // pages31a: 一护技能 — atk/getsuga/flash/block 专属帧；bankai/mugetsu 仍 idle 桩（查克拉同二档：tryCast 减半一次、−8/s）
   function castIchigoAtk(f) {
     f.anim = "i_atk";
     f.animT = 0;
@@ -5297,8 +5302,28 @@
     } else if (reacting) {
       set = ichigo.idle;
       idx = 0;
+    } else if (f.anim === "i_atk" && ichigo.atk && ichigo.atk[0] && ichigo.atk[0].complete) {
+      set = ichigo.atk;
+      var ua = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (ua < 0) ua = 0; if (ua > 0.999) ua = 0.999;
+      idx = Math.min(5, Math.floor(ua * 6));
+    } else if (f.anim === "i_getsuga" && ichigo.getsuga && ichigo.getsuga[0] && ichigo.getsuga[0].complete) {
+      set = ichigo.getsuga;
+      var ug = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (ug < 0) ug = 0; if (ug > 0.999) ug = 0.999;
+      idx = Math.min(5, Math.floor(ug * 6));
+    } else if (f.anim === "i_flash" && ichigo.flash && ichigo.flash[0] && ichigo.flash[0].complete) {
+      set = ichigo.flash;
+      var uf = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (uf < 0) uf = 0; if (uf > 0.999) uf = 0.999;
+      idx = Math.min(5, Math.floor(uf * 6));
+    } else if (f.anim === "i_block" && ichigo.block && ichigo.block[0] && ichigo.block[0].complete) {
+      set = ichigo.block;
+      var ub = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (ub < 0) ub = 0; if (ub > 0.999) ub = 0.999;
+      idx = Math.min(5, Math.floor(ub * 6));
     } else if (f.anim && f.anim.indexOf("i_") === 0) {
-      // 技能专属帧未到：用 idle 播进度
+      // bankai/mugetsu 等专属帧未到：用 idle 播进度
       set = ichigo.idle;
       idx = Math.min(7, Math.floor(((f.animT || 0) / Math.max(0.01, f.animDur || 0.4)) * 8));
     } else if (f.gait === "run" || f.gait === "walk") {
