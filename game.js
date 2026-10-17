@@ -71,7 +71,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 30s stall → retry UI.
-  var ASSET_V = "pages31f";
+  var ASSET_V = "pages31g";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [], ichigo: [], fushiguro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 6;
@@ -431,7 +431,8 @@
       bindArr(ichigo.bankai); bindArr(ichigo.mugetsu); bindArr(ichigo.mugetsuFx);
     } else if (kitId === "fushiguro") {
       bindArr(fushiguro.idle); bindArr(fushiguro.run); bindArr(fushiguro.hitstun); bindArr(fushiguro.knock);
-      bindArr(fushiguro.atk); bindArr(fushiguro.shadow);
+      bindArr(fushiguro.atk); bindArr(fushiguro.dogs); bindArr(fushiguro.nue);
+      bindArr(fushiguro.elephant); bindArr(fushiguro.shadow); bindArr(fushiguro.domain);
     }
   }
   function registerKitSheets(kitId) {
@@ -745,28 +746,27 @@
     hitstun: loadNumbered("fushiguro/hitstun", 6),
     knock: loadNumbered("fushiguro/knockdown", 6),
     atk: loadNumbered("fushiguro/attack", 6),
-    // 玉犬/鵺/满象帧被打回返修中：先空（drawFushiguro 播 idle 顶位）。帧到后改回
-    // loadNumbered("fushiguro/skill_dogs"|"skill_nue"|"skill_elephant", 6) 并在 bind 里加上即可
-    dogs: [],
-    nue: [],
-    elephant: [],
-    shadow: loadNumbered("fushiguro/skill_shadow", 6)
+    dogs: loadNumbered("fushiguro/skill_dogs", 6),
+    nue: loadNumbered("fushiguro/skill_nue", 6),
+    elephant: loadNumbered("fushiguro/skill_elephant", 6),
+    shadow: loadNumbered("fushiguro/skill_shadow", 6),
+    domain: loadNumbered("fushiguro/skill_domain", 8)
   };
-  // pages31f: 技能帧人物比 idle 小一圈（站姿 ~322 vs 355）→ 技能套放大 1.1；
-  // 部分帧人物偏离画布中心（式神占画面）→ 每帧水平锚点修正（源像素，面朝右为正）
-  var fushiSkillScale = 1.1;
+  // pages31g: 返修帧与 idle 同身高，去掉 1.1；ox 清零
+  var fushiSkillScale = 1.0;
   var fushiFrameOx = {
     atk: [0, 0, 0, 0, 0, 0],
-    dogs: [0, 0, 23, 47, 42, 64],
-    nue: [0, -18, 124, 16, 8, 0],
-    elephant: [120, 0, 0, 29, 0, 0],
-    shadow: [0, 0, 0, 0, 0, 0]
+    dogs: [0, 0, 0, 0, 0, 0],
+    nue: [0, 0, 0, 0, 0, 0],
+    elephant: [0, 0, 0, 0, 0, 0],
+    shadow: [0, 0, 0, 0, 0, 0],
+    domain: [0, 0, 0, 0, 0, 0, 0, 0]
   };
-  // canvas 320×436；opaque ~108×355；脚底距底 ~8px；面朝右 → nativeDir +1
-  var fushiFootPad = 8;
+  // canvas 320×436；IDLE_H≈378；脚底距底 ~10px；面朝右 → nativeDir +1
+  var fushiFootPad = 10;
   var fushiScale = (180 * obitoScale) / 436;
   var fushiBodyW = 110 * fushiScale;
-  var fushiBodyH = 355 * fushiScale;
+  var fushiBodyH = 378 * fushiScale;
 
   var clothFps = 9;
   function plantCaster(f) {
@@ -2031,6 +2031,12 @@
     else finishRound("draw");
   }
 
+  // pages31g: 释放技能前/技能结束后面向对手（背身技除外）
+  function faceTowardFoe(f) {
+    if (!f || f.hp <= 0) return;
+    var foe = nearestEnemy(f);
+    if (foe && foe !== f && Math.abs(foe.x - f.x) > 4) f.facing = foe.x >= f.x ? 1 : -1;
+  }
   function tryCast(f, id) {
     if (!f || f.hp <= 0) return;
     if (paused || matchState !== "fight" || koId) return;
@@ -2091,12 +2097,14 @@
       return;
     }
     if (id === "phase" || id === "needle") {
+      faceTowardFoe(f);
       castNeedle(f);
       f.chakra -= cost;
       applySkillCd(f, sk, id);
       return;
     }
     if (id === "infinity" && isGojo(f)) {
+      faceTowardFoe(f);
       castGojoInfinity(f);
       f.chakra -= cost;
       applySkillCd(f, sk, id);
@@ -2106,6 +2114,8 @@
     f.castBuf = null;
     // pages25: any new action ends a lingering 吸引 so its pose/fx cannot look like J fired again
     if (f.pullOn || f.pullFx > 0) { f.pullOn = false; f.pullFx = 0; }
+    // pages31g: 技能出手时面向对手（背身技由各自 cast 再改）
+    if (id !== "tele" && id !== "back" && id !== "swap" && id !== "balloon") faceTowardFoe(f);
     f.chakra -= cost;
     applySkillCd(f, sk, id);
     if (id === "punch") beginMelee(f, "punch", 0.56, 0.24);
@@ -3435,16 +3445,14 @@
         iy += sticks[1].ny;
       }
     }
-    if (ix < 0) f.facing = -1;
-    else if (ix > 0) f.facing = 1;
-    // pages30: keep last movement facing when idle (left stop stays left, right stays right).
-    // Skill casts still face the foe elsewhere; do not snap here.
+    // pages31g: 摇杆残余视为停步。站位/跑动/越过对手后一律面朝对手
+    // （不再跟移动方向改 facing，避免越过对手后背对）。背身技在 cast 里自行改。
+    if (Math.abs(ix) < 0.2) ix = 0;
+    if (Math.abs(iy) < 0.2) iy = 0;
     if (ix === 0 && iy === 0) {
       f.gait = "idle";
-      // pages31e: 停步/空闲立即面向对手（技能中不打断）
       if (!(f.busy > 0) && !(f.dashT > 0) && !(f.counterT > 0) && !(f.ult2Phase > 0)) {
-        var foeIdle = nearestEnemy(f);
-        if (foeIdle && foeIdle !== f && Math.abs(foeIdle.x - f.x) > 4) f.facing = foeIdle.x >= f.x ? 1 : -1;
+        faceTowardFoe(f);
       }
       return;
     }
@@ -3453,10 +3461,13 @@
     var speed = f.moveSpeed || (isObito(f) ? 546 : 437);
     if ((f.fushiSlowT || 0) > 0) speed *= 0.5; // pages31f: 满象命中减速
     var step = clampSpot(f.x + ix / len * speed * dt, f.y + iy / len * speed * dt);
-    // pages31f: 顶墙/被挡住原地不动时不播跑步（避免松键前后卡跑姿）
+    // pages31f/g: 顶墙/被挡住原地不动时不播跑步（松键立即站立）
     if (Math.abs(step.x - f.x) + Math.abs(step.y - f.y) < speed * dt * 0.05) f.gait = "idle";
     f.x = step.x;
     f.y = step.y;
+    if (!(f.busy > 0) && !(f.dashT > 0) && !(f.counterT > 0) && !(f.ult2Phase > 0)) {
+      faceTowardFoe(f);
+    }
   }
 
   function updateOneAI(f, dt) {
@@ -3731,12 +3742,15 @@
     if (matchState === "fight") separateBodies(dt);
   }
   var KNOCK_EDGE = 220;
-  // pages31f: 身体不重叠（所有角色）。2.5D 纵深差 < SEP_DY 且横向 < SEP_DX 视为叠人
-  // （含"站在对方头上"），沿 x 平滑推开；一方贴边则只推另一方向内侧。飞行/冲刺/虚化不推。
-  var SEP_DX = 68, SEP_DY = 150, SEP_SPEED = 720;
+  // pages31g: 身体不重叠（全角色）。走位边界与 clampSpot 一致（90..1190）；
+  // 在 update 钳制之后硬保证 |dx|>=SEP_DX；贴墙者钉住，只挡推的人；松键/顶人立即站立。
+  var SEP_DX = 68, SEP_DY = 150;
+  var WALK_LO = 90, WALK_HI = 1190;
   function fighterXLimits(f) {
-    var e = (isAirborne(f) || isDowned(f) || f.knockPhase === "air" || f.knockPhase === "down") ? KNOCK_EDGE : 70;
-    return { lo: e, hi: W - e };
+    if (isAirborne(f) || isDowned(f) || f.knockPhase === "air" || f.knockPhase === "down") {
+      return { lo: KNOCK_EDGE, hi: W - KNOCK_EDGE };
+    }
+    return { lo: WALK_LO, hi: WALK_HI };
   }
   function separateBodies(dt) {
     var fs = activeFighters(), i, j, a, b;
@@ -3746,19 +3760,36 @@
         if (!a || !b || a.hp <= 0 || b.hp <= 0) continue;
         if (isAirborne(a) || isAirborne(b)) continue;
         if ((a.dashT || 0) > 0 || (b.dashT || 0) > 0 || (a.phase || 0) > 0 || (b.phase || 0) > 0) continue;
-        var dx = b.x - a.x, dy = b.y - a.y;
-        if (Math.abs(dy) >= SEP_DY || Math.abs(dx) >= SEP_DX) continue;
-        var dir = dx > 0.5 ? 1 : (dx < -0.5 ? -1 : ((a.x + b.x) / 2 > W / 2 ? -1 : 1)); // b 往 dir 侧
-        var need = SEP_DX - Math.abs(dx);
-        var step = Math.min(need, SEP_SPEED * dt);
+        var dy = b.y - a.y;
+        if (Math.abs(dy) >= SEP_DY) continue;
+        var dx = b.x - a.x;
+        if (Math.abs(dx) >= SEP_DX) continue;
+        var dir = dx > 0.5 ? 1 : (dx < -0.5 ? -1 : ((a.x + b.x) / 2 >= W / 2 ? -1 : 1));
         var la = fighterXLimits(a), lb = fighterXLimits(b);
-        var roomA = dir > 0 ? a.x - la.lo : la.hi - a.x; // a 往 -dir 的空间
-        var roomB = dir > 0 ? lb.hi - b.x : b.x - lb.lo; // b 往 dir 的空间
-        var ma = step / 2, mb = step / 2;
-        if (roomA < ma) { mb += ma - Math.max(0, roomA); ma = Math.max(0, roomA); }
-        if (roomB < mb) { ma += mb - Math.max(0, roomB); mb = Math.max(0, roomB); }
-        a.x -= dir * Math.min(ma, Math.max(0, roomA));
-        b.x += dir * Math.min(mb, Math.max(0, roomB));
+        var pinEps = 1.5;
+        var aPinOut = dir > 0 ? (a.x - la.lo <= pinEps) : (la.hi - a.x <= pinEps);
+        var bPinOut = dir > 0 ? (lb.hi - b.x <= pinEps) : (b.x - lb.lo <= pinEps);
+        if (bPinOut && !aPinOut) {
+          a.x = clamp(b.x - dir * SEP_DX, la.lo, la.hi);
+          a.gait = "idle";
+        } else if (aPinOut && !bPinOut) {
+          b.x = clamp(a.x + dir * SEP_DX, lb.lo, lb.hi);
+          b.gait = "idle";
+        } else if (aPinOut && bPinOut) {
+          if (dir > 0) { b.x = lb.hi; a.x = clamp(b.x - SEP_DX, la.lo, la.hi); }
+          else { a.x = la.lo; b.x = clamp(a.x + SEP_DX, lb.lo, lb.hi); }
+          a.gait = "idle"; b.gait = "idle";
+        } else {
+          var mid = (a.x + b.x) / 2;
+          var na = mid - dir * (SEP_DX / 2);
+          var nb = mid + dir * (SEP_DX / 2);
+          if (na < la.lo) { nb += la.lo - na; na = la.lo; }
+          if (na > la.hi) { nb -= na - la.hi; na = la.hi; }
+          if (nb < lb.lo) { na -= lb.lo - nb; nb = lb.lo; }
+          if (nb > lb.hi) { na += nb - lb.hi; nb = lb.hi; }
+          a.x = clamp(na, la.lo, la.hi);
+          b.x = clamp(nb, lb.lo, lb.hi);
+        }
       }
     }
   }
@@ -4149,6 +4180,7 @@
             f.ult2Phase = 0;
           }
           f.anim = "idle";
+          faceTowardFoe(f);
         }
         }
       }
@@ -4164,8 +4196,8 @@
           sdx = sep[b].x - sep[a].x;
           sdy = sep[b].y - sep[a].y;
           ad = Math.sqrt(sdx * sdx + sdy * sdy);
-          if (ad < 46 && ad > 0.01) {
-            push = (46 - ad) * 0.5;
+          if (ad < 68 && ad > 0.01) {
+            push = (68 - ad) * 0.5;
             nx = sdx / ad;
             ny = sdy / ad;
             ls = clampSpot(sep[a].x - nx * push, sep[a].y - ny * push);
@@ -5787,16 +5819,16 @@
       set = fushiguro.idle;
       idx = 0;
     } else if (f.anim && f.anim.indexOf("f_") === 0) {
-      var fkey = { f_atk: "atk", f_dogs: "dogs", f_nue: "nue", f_elephant: "elephant", f_shadow: "shadow" }[f.anim];
+      var fkey = { f_atk: "atk", f_dogs: "dogs", f_nue: "nue", f_elephant: "elephant", f_shadow: "shadow", f_domain: "domain" }[f.anim];
       var fset = fkey ? fushiguro[fkey] : null;
       var up = f.animDur > 0 ? f.animT / f.animDur : 1;
       if (up < 0) up = 0; if (up > 0.999) up = 0.999;
       if (fset && fset[0] && fset[0].complete) {
         set = fset;
-        idx = Math.min(5, Math.floor(up * 6));
+        var nfr = fset.length || 6;
+        idx = Math.min(nfr - 1, Math.floor(up * nfr));
         skillKey = fkey;
       } else {
-        // 嵌合庭帧未到：idle 顶位
         set = fushiguro.idle;
         idx = Math.min(7, Math.floor(up * 8));
       }
