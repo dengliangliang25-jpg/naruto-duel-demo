@@ -70,7 +70,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
-  var ASSET_V = "pages30f";
+  var ASSET_V = "pages30g";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 8;
@@ -397,7 +397,7 @@
       bindArr(pain.combo); bindArr(pain.kick); bindArr(pain.rod); bindArr(pain.push);
       bindArr(pain.repulse); bindArr(pain.pullCast); bindArr(pain.pullFx); bindArr(pain.cloth);
     } else if (kitId === "tanjiro") {
-      bindArr(tanjiro.idle); bindArr(tanjiro.ult1); bindArr(tanjiro.ult2);
+      bindArr(tanjiro.idle); bindArr(tanjiro.run); bindArr(tanjiro.ult1); bindArr(tanjiro.ult2);
       bindArr(tanjiro.water.atk); bindArr(tanjiro.water.water2); bindArr(tanjiro.water.water2c);
       bindArr(tanjiro.water.water4); bindArr(tanjiro.water.water1);
       bindArr(tanjiro.fire.atk); bindArr(tanjiro.fire.water2); bindArr(tanjiro.fire.water2c);
@@ -603,6 +603,7 @@
   }
   var tanjiro = {
     idle: loadNumbered("tanjiro/idle", 8),
+    run: loadNumbered("tanjiro/run", 8),
     water: {
       atk: loadNumbered("tanjiro/water/普攻", 6),
       water2: loadNumbered("tanjiro/water/二型", 6),
@@ -4093,6 +4094,8 @@
     // pages30e: idle/atk sheets face LEFT in source art; nativeDir -1 so facing+1 draws facing right.
     if (set === tanjiro.idle || set === tanjiro.water.atk || set === tanjiro.fire.atk) return -1;
     if (set === tanjiro.water.water2c || set === tanjiro.fire.water2c) return -1;
+    // pages30g: run art faces RIGHT → nativeDir +1
+    if (set === tanjiro.run) return 1;
     // hitstun/knockdown + dash/lunge sets face RIGHT in source
     if (set === tanjiro.hitstun || set === tanjiro.knock) return 1;
     // 二型 / 四型 / 一型 / 大招
@@ -4218,7 +4221,8 @@
       set = form.water2;
       idx = 3 + (Math.floor(time * 6) % 2);
     } else if (f.gait === "run" || f.gait === "walk") {
-      set = tanjiro.idle;
+      // pages30g: dedicated run strip (8 frames); fall back to idle if unbound
+      set = (tanjiro.run && tanjiro.run[0] && tanjiro.run[0].complete) ? tanjiro.run : tanjiro.idle;
       idx = Math.floor(time * 10) % 8;
     } else {
       set = tanjiro.idle;
