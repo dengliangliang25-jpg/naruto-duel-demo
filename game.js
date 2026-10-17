@@ -70,7 +70,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 20s stall → retry UI.
-  var ASSET_V = "pages31a";
+  var ASSET_V = "pages31b";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [], ichigo: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 8;
@@ -414,6 +414,8 @@
     } else if (kitId === "ichigo") {
       bindArr(ichigo.idle); bindArr(ichigo.run); bindArr(ichigo.hitstun); bindArr(ichigo.knock);
       bindArr(ichigo.atk); bindArr(ichigo.getsuga); bindArr(ichigo.flash); bindArr(ichigo.block);
+      bindArr(ichigo.bankaiIdle); bindArr(ichigo.bankaiRun); bindArr(ichigo.bankaiAtk);
+      bindArr(ichigo.bankai); bindArr(ichigo.mugetsu); bindArr(ichigo.mugetsuFx);
     }
   }
   function registerKitSheets(kitId) {
@@ -697,7 +699,7 @@
   var luffyBodyW = 145 * luffyScale;
   var luffyBodyH = 436 * luffyScale;
 
-  // pages31a: 一护 batch2 — +斩月/月牙天冲/瞬步/挡刀；bankai/无月仍 idle 桩
+  // pages31b: 一护全套 — +bankai idle/run/attack + skill_bankai + mugetsu + fx_mugetsu
   var ichigo = {
     idle: loadNumbered("ichigo/idle", 8),
     run: loadNumbered("ichigo/run", 8),
@@ -706,7 +708,13 @@
     atk: loadNumbered("ichigo/attack", 6),
     getsuga: loadNumbered("ichigo/skill_getsuga", 6),
     flash: loadNumbered("ichigo/skill_flash", 6),
-    block: loadNumbered("ichigo/skill_block", 6)
+    block: loadNumbered("ichigo/skill_block", 6),
+    bankaiIdle: loadNumbered("ichigo/bankai_idle", 8),
+    bankaiRun: loadNumbered("ichigo/bankai_run", 8),
+    bankaiAtk: loadNumbered("ichigo/bankai_attack", 6),
+    bankai: loadNumbered("ichigo/skill_bankai", 6),
+    mugetsu: loadNumbered("ichigo/skill_mugetsu", 6),
+    mugetsuFx: loadNumbered("ichigo/fx_mugetsu", 6)
   };
   // canvas 320×436；opaque ~307×378；脚底距底 ~8px；面朝右 → nativeDir +1
   var ichigoFootPad = 8;
@@ -2550,7 +2558,7 @@
     rings.push({ x: f.x + f.facing * 120, y: f.y - luffyBodyH * 0.45, life: 0.5, max: 0.5, color: "rgba(255,220,120,0.7)", r0: 12, r1: 90 });
   }
 
-  // pages31a: 一护技能 — atk/getsuga/flash/block 专属帧；bankai/mugetsu 仍 idle 桩（查克拉同二档：tryCast 减半一次、−8/s）
+  // pages31b: 一护技能全套帧；查克拉同二档：tryCast 减半一次、−8/s、无 chakraLock=999
   function castIchigoAtk(f) {
     f.anim = "i_atk";
     f.animT = 0;
@@ -5279,6 +5287,7 @@
     var alpha = 1;
     var reacting = isAirborne(f) || isDowned(f) || ((f.stun || 0) > 0 && f.hitLight);
     var drawFacing = f.facing;
+    var drawMugetsuFx = false;
     if (reacting && (f.hitLeanDir || 0)) {
       drawFacing = (f.hitLeanDir > 0) ? -1 : 1;
     }
@@ -5300,10 +5309,10 @@
       var su = 1 - Math.min(1, (f.stun || 0) / 0.55);
       idx = Math.min(5, Math.floor(su * 6));
     } else if (reacting) {
-      set = ichigo.idle;
+      set = (f.bankai && ichigo.bankaiIdle && ichigo.bankaiIdle[0] && ichigo.bankaiIdle[0].complete) ? ichigo.bankaiIdle : ichigo.idle;
       idx = 0;
-    } else if (f.anim === "i_atk" && ichigo.atk && ichigo.atk[0] && ichigo.atk[0].complete) {
-      set = ichigo.atk;
+    } else if (f.anim === "i_atk" && ((f.bankai && ichigo.bankaiAtk && ichigo.bankaiAtk[0] && ichigo.bankaiAtk[0].complete) || (ichigo.atk && ichigo.atk[0] && ichigo.atk[0].complete))) {
+      set = (f.bankai && ichigo.bankaiAtk && ichigo.bankaiAtk[0] && ichigo.bankaiAtk[0].complete) ? ichigo.bankaiAtk : ichigo.atk;
       var ua = f.animDur > 0 ? f.animT / f.animDur : 1;
       if (ua < 0) ua = 0; if (ua > 0.999) ua = 0.999;
       idx = Math.min(5, Math.floor(ua * 6));
@@ -5322,15 +5331,27 @@
       var ub = f.animDur > 0 ? f.animT / f.animDur : 1;
       if (ub < 0) ub = 0; if (ub > 0.999) ub = 0.999;
       idx = Math.min(5, Math.floor(ub * 6));
+    } else if (f.anim === "i_bankai" && ((ichigo.bankai && ichigo.bankai[0] && ichigo.bankai[0].complete) || (ichigo.bankaiIdle && ichigo.bankaiIdle[0] && ichigo.bankaiIdle[0].complete))) {
+      set = (ichigo.bankai && ichigo.bankai[0] && ichigo.bankai[0].complete) ? ichigo.bankai : ichigo.bankaiIdle;
+      var ubk = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (ubk < 0) ubk = 0; if (ubk > 0.999) ubk = 0.999;
+      idx = (set === ichigo.bankai) ? Math.min(5, Math.floor(ubk * 6)) : Math.min(7, Math.floor(ubk * 8));
+    } else if (f.anim === "i_mugetsu" && ichigo.mugetsu && ichigo.mugetsu[0] && ichigo.mugetsu[0].complete) {
+      set = ichigo.mugetsu;
+      var um = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (um < 0) um = 0; if (um > 0.999) um = 0.999;
+      idx = Math.min(5, Math.floor(um * 6));
+      drawMugetsuFx = true;
     } else if (f.anim && f.anim.indexOf("i_") === 0) {
-      // bankai/mugetsu 等专属帧未到：用 idle 播进度
-      set = ichigo.idle;
+      set = (f.bankai && ichigo.bankaiIdle && ichigo.bankaiIdle[0] && ichigo.bankaiIdle[0].complete) ? ichigo.bankaiIdle : ichigo.idle;
       idx = Math.min(7, Math.floor(((f.animT || 0) / Math.max(0.01, f.animDur || 0.4)) * 8));
     } else if (f.gait === "run" || f.gait === "walk") {
-      set = (ichigo.run && ichigo.run[0] && ichigo.run[0].complete) ? ichigo.run : ichigo.idle;
+      if (f.bankai && ichigo.bankaiRun && ichigo.bankaiRun[0] && ichigo.bankaiRun[0].complete) set = ichigo.bankaiRun;
+      else set = (ichigo.run && ichigo.run[0] && ichigo.run[0].complete) ? ichigo.run : ichigo.idle;
       idx = Math.floor(time * 10) % 8;
     } else {
-      set = ichigo.idle;
+      if (f.bankai && ichigo.bankaiIdle && ichigo.bankaiIdle[0] && ichigo.bankaiIdle[0].complete) set = ichigo.bankaiIdle;
+      else set = ichigo.idle;
       idx = Math.floor(time * 8) % 8;
     }
     if (f.invuln > 0 && !isDowned(f) && !isAirborne(f) && Math.sin(time * 40) > 0) alpha *= 0.45;
@@ -5338,8 +5359,15 @@
     var drawAir = (f.airH || 0);
     if (f.busy > 0 || (f.anim && f.anim.indexOf("i_") === 0)) drawAir = 0;
     var tiltUse = (set === ichigo.hitstun || set === ichigo.knock) ? 0 : fighterDrawTilt(f);
+    // pages31b: 无月特效层叠在人物下/上（先 FX 后人物可读斩击弧）
+    if (drawMugetsuFx && ichigo.mugetsuFx && ichigo.mugetsuFx[0] && ichigo.mugetsuFx[0].complete) {
+      drawIchigoAt(f.x, f.y - drawAir, drawFacing, ichigo.mugetsuFx, idx, Math.min(1, alpha * 0.95), 0, 0);
+    }
     drawIchigoAt(f.x, f.y - drawAir, drawFacing, set, idx, alpha, tiltUse, f.hitShake || 0);
-    if (f.bankai) {
+    if (drawMugetsuFx && ichigo.mugetsuFx && ichigo.mugetsuFx[0] && ichigo.mugetsuFx[0].complete) {
+      drawIchigoAt(f.x, f.y - drawAir, drawFacing, ichigo.mugetsuFx, idx, Math.min(1, alpha * 0.55), 0, 0);
+    }
+    if (f.bankai && f.anim !== "i_mugetsu") {
       var pulse = 0.55 + 0.45 * Math.sin(time * 10);
       ctx.save();
       ctx.translate(f.x, f.y - ichigoBodyH * 0.45);
