@@ -71,7 +71,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 30s stall → retry UI.
-  var ASSET_V = "pages31p";
+  var ASSET_V = "pages31q";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [], ichigo: [], fushiguro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 6;
@@ -688,9 +688,13 @@
   };
   // Match on-screen body height to Obito (~180 * obitoScale).
   // pages29: frames padded +36px on top so hair is not flush-cropped; foot line still ~20px above bottom.
+  // pages31q: scale is idle-body fixed — never adapt to img.width/height or opaque bbox.
+  // fire/water mix 320×400 (README FOOT y=380 → pad 20) and 320×436 (idle top-pad); unify foot pad by canvas H.
   var tanjiroTopPad = 36;
+  var tanjiroRefCanvasH = 436;
   var tanjiroScale = (180 * obitoScale) / (360 + tanjiroTopPad);
-  var tanjiroFootPad = 20; // empty rows under soles
+  var tanjiroFootPad = 20; // idle 436 / README 400 default empty rows under soles
+  var tanjiroFootPad400 = 20; // 320×400 skill sheets (反击斩 / ult二段)
   var tanjiroBodyW = 211 * tanjiroScale;
   var tanjiroBodyH = 360 * tanjiroScale;
 
@@ -814,7 +818,7 @@
   var repulseFps = 16;
   // Startup before the shield is live, scaled with the fps change (0.15 * 12 / 16).
   var repulseWind = 0.15 * 12 / repulseFps;
-  // Standing head-to-sole on this sheet is 171px; idle opaque span is 149px.
+  // Fixed idle-body calibration (149 idle opaque vs 171 on this sheet) — not per-frame bbox.
   var repulseScale = painScale * (149 / 171);
   // Source px from the sandal sole up from the bottom of every repulse frame.
   var repulseFootPad = 53;
@@ -824,6 +828,7 @@
   // Pull (吸力) cast + black-core VFX: 24 frames synced by index.
   var pullCastFps = 18;
   var pullCastSpan = 24 / pullCastFps;
+  // Fixed idle-body calibration (idle body 433@3x vs cast sheet body 532) — not per-frame bbox.
   var pullCastScale = painScale * (433 / 3) / 532;
   var pullCastFootPad = 6;
   var pullFxScale = 1.15;
@@ -5256,12 +5261,11 @@
       alpha *= 0.45;
     }
     if (phased && phaseSlow > 0) {
-      var bodyFrame = obitoImage(set, idx);
-      var bodyH = bodyFrame ? bodyFrame.height * obitoScale : 280;
+      // pages31q: fixed idle bodyH — do not size sharingan from frame outer box
+      var bodyH = 180 * obitoScale;
       drawSharingan(f, bodyH);
     }
     var footDrop = 0;
-    var knockBoost = 1;
     if (set === obito.tele) {
       var pad = teleFootPad[idx];
       if (pad == null) pad = obitoIdleFootPad;
@@ -5271,13 +5275,11 @@
       if (ipad == null) ipad = obitoIdleFootPads[0];
       footDrop = (ipad - obitoIdleFootPads[0]) * obitoScale;
     } else if (knocking) {
-      // pages30d: art sets knock 11–16 logical size to 225×257; extra boost so downed body ≈ standing
+      // pages31q: no mid-knock scale boost from frame outer box — idle/juubi fixed scale only
       footDrop = 0;
-      var kimg = obitoImage(set, idx);
-      if (kimg && kimg.width >= 200) knockBoost = 1.55;
-      else knockBoost = 1.05;
     }
-    var scaleMul = knockBoost;
+    // Fixed body scale: 1 for Obito strips; juubi overrides below. Never img.width/bbox.
+    var scaleMul = 1;
     var juubiDrop = 0;
     if (useJuubiScale) {
       scaleMul = juubiScale / obitoScale;
@@ -5526,6 +5528,7 @@
   function drawTanjiroAt(x, groundY, facing, set, index, alpha, tilt, shakeAmp) {
     var img = tanjiroImage(set, index);
     if (!img) return;
+    // Fixed idle scale for every set (atk/skill/hit/knock/ult). Canvas H must not retarget scale.
     var sc = tanjiroScale;
     var sx = 0;
     var sy = 0;
@@ -5536,8 +5539,11 @@
     }
     var dw = img.width * sc;
     var dh = img.height * sc;
-    // Plant soles: source foot line ~20px above PNG bottom.
-    var y = groundY + 2 + tanjiroFootPad * sc;
+    // Unify foot pad: 400-tall sheets use README pad; 436 idle family uses tanjiroFootPad.
+    // Art-small bodies on 400 sheets stay small until re-export — do not bbox-upscale.
+    var srcH = img.height || tanjiroRefCanvasH;
+    var footPad = (srcH <= 410) ? tanjiroFootPad400 : tanjiroFootPad;
+    var y = groundY + 2 + footPad * sc;
     ctx.save();
     ctx.translate(x + sx, y + sy);
     if (tilt) ctx.rotate(tilt);
