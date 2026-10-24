@@ -71,7 +71,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 30s stall → retry UI.
-  var ASSET_V = "pages31x";
+  var ASSET_V = "pages31y";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [], ichigo: [], fushiguro: [], denji: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 6;
@@ -586,10 +586,10 @@
     juubiAtk: loadLoosePng("obito_juubi/juubi_atk", 6, "obito"),
     juubiBlock: loadLoosePng("obito_juubi/juubi_block", 6, "obito"),
     juubiSpin: loadLoosePng("obito_juubi/juubi_spin", 8, "obito"),
-    // pages31v: 专属受击/击飞/落地目录就绪后再 loadLoosePng；现回落普通带土 knock
-    juubiHit: [],
-    juubiKnock: [],
-    juubiLand: []
+    // pages31y: 挂十尾受击/击飞/落地同尺帧（美术交件）
+    juubiHit: loadLoosePng("obito_juubi/juubi_hitstun", 6, "obito"),
+    juubiKnock: loadLoosePng("obito_juubi/juubi_knockdown", 6, "obito"),
+    juubiLand: loadLoosePng("obito_juubi/juubi_knock_land", 6, "obito")
   };
   var portraitImgs = {};
   (function loadPortraits() {
