@@ -71,7 +71,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 30s stall → retry UI.
-  var ASSET_V = "pages31y";
+  var ASSET_V = "pages31z";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [], ichigo: [], fushiguro: [], denji: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 6;
@@ -4066,14 +4066,11 @@
         iy += sticks[1].ny;
       }
     }
-    // pages31i: 跑=跟位移朝向；idle/停步/顶墙不动=面朝对手。背身技在 cast 里自行改。
+    // pages31z: 跑=跟水平位移朝向；停跑/顶墙/纯纵移=保持最后跑向，不弹回对敌。施法朝向仍见 faceTowardFoe。
     if (Math.abs(ix) < 0.2) ix = 0;
     if (Math.abs(iy) < 0.2) iy = 0;
     if (ix === 0 && iy === 0) {
       f.gait = "idle";
-      if (!(f.busy > 0) && !(f.dashT > 0) && !(f.counterT > 0) && !(f.ult2Phase > 0)) {
-        faceTowardFoe(f);
-      }
       return;
     }
     f.gait = "run";
@@ -4085,11 +4082,9 @@
     var moved = Math.abs(step.x - f.x) + Math.abs(step.y - f.y) >= speed * dt * 0.05;
     if (!moved) {
       f.gait = "idle";
-      if (!(f.busy > 0) && !(f.dashT > 0) && !(f.counterT > 0) && !(f.ult2Phase > 0)) faceTowardFoe(f);
     } else if (!(f.busy > 0) && !(f.dashT > 0) && !(f.counterT > 0) && !(f.ult2Phase > 0)) {
-      // 跑动朝向跟水平位移；纯纵向移动时保持面朝对手
+      // 跑动朝向跟水平位移；纯纵向移动时保持上一朝向
       if (Math.abs(step.x - f.x) > 0.01) f.facing = step.x >= f.x ? 1 : -1;
-      else faceTowardFoe(f);
     }
     f.x = step.x;
     f.y = step.y;
@@ -4132,9 +4127,8 @@
     }
     f.aiIx = wantX;
     f.aiIy = wantY;
-    // pages31i: AI 跑动跟位移朝向，停步面朝对手
+    // pages31z: AI 跑动跟位移朝向，停步保持最后跑向（不弹回对敌）
     if (Math.abs(wantX) > 0.15) f.facing = wantX > 0 ? 1 : -1;
-    else faceTowardFoe(f);
     if (f.aiThink > 0) return;
     // pages29: practice default = no auto-attack (player triggers enemy skills manually)
     if (gameMode === "practice" && !practiceAutoAttack) return;
