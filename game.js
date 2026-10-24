@@ -71,7 +71,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 30s stall → retry UI.
-  var ASSET_V = "pages31i";
+  var ASSET_V = "pages31j";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [], ichigo: [], fushiguro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 6;
@@ -690,7 +690,7 @@
     infinityLoop: loadNumbered("gojo/infinity_loop", 4),
     domain: loadNumbered("gojo/skill_domain", 6)
   };
-  // canvas 320×436；opaque ~145×390；脚底距底 ~7px；面朝右 → nativeDir +1
+  // canvas 320×436；opaque ~145×390；脚底距底 ~7px；朝向见 gojoNativeDir
   var gojoFootPad = 7;
   var gojoScale = (180 * obitoScale) / 390;
   var gojoBodyW = 145 * gojoScale;
@@ -711,7 +711,7 @@
     gear2Atk: loadNumbered("luffy/gear2_attack", 6),
     spear: loadNumbered("luffy/skill_rocket", 8)
   };
-  // canvas 320×436；面朝右 → nativeDir +1
+  // canvas 320×436；朝向见 luffyNativeDir
   var luffyFootPad = 8;
   var luffyScale = (180 * obitoScale) / 436;
   var luffyBodyW = 145 * luffyScale;
@@ -734,7 +734,7 @@
     mugetsu: loadNumbered("ichigo/skill_blackgetsuga", 6),
     mugetsuFx: loadNumbered("ichigo/fx_blackgetsuga", 6)
   };
-  // canvas 320×436；opaque ~307×378；脚底距底 ~8px；面朝右 → nativeDir +1
+  // canvas 320×436；opaque ~307×378；脚底距底 ~8px；朝向见 ichigoNativeDir
   var ichigoFootPad = 8;
   var ichigoScale = (180 * obitoScale) / 436;
   var ichigoBodyW = 160 * ichigoScale;
@@ -763,7 +763,7 @@
     shadow: [0, 0, 0, 0, 0, 0],
     domain: [0, 0, 0, 0, 0, 0, 0, 0]
   };
-  // canvas 320×436；IDLE_H≈378；脚底距底 ~10px；面朝右 → nativeDir +1
+  // canvas 320×436；IDLE_H≈378；脚底距底 ~10px；朝向见 fushiNativeDir
   var fushiFootPad = 10;
   var fushiScale = (180 * obitoScale) / 436;
   var fushiBodyW = 110 * fushiScale;
@@ -776,6 +776,19 @@
     f.airborne = false;
     f.launchVx = 0;
     f.launchVy = 0;
+  }
+  // pages31j: 放技能期间禁止玩家/AI 走位（技能自带 dashT 位移保留）
+  function castingLocked(f) {
+    if (!f) return true;
+    if (f.busy > 0) return true;
+    if ((f.counterT || 0) > 0) return true;
+    if ((f.ult2Phase || 0) > 0) return true;
+    if (f.pullOn || f.repulseOn || (f.shieldWind || 0) > 0) return true;
+    var a = f.anim || "idle";
+    if (a === "idle") return false;
+    if (a.indexOf("t_") === 0 || a.indexOf("g_") === 0 || a.indexOf("l_") === 0 || a.indexOf("i_") === 0 || a.indexOf("f_") === 0) return true;
+    if (a === "combo" || a === "kick" || a === "rod" || a === "push" || a === "back" || a === "pull" || a === "cast" || a === "slash" || a === "punch" || a === "thrust" || a === "cleave" || a === "tele" || a === "breath" || a === "fire" || a === "wave") return true;
+    return false;
   }
   // Repulsion sheet: frames 1-12 are F05-F16, 13-20 are F17-F24. Play once, no loop.
   // 16 fps (was 12) shortens the wind-up; short press still ends on F16, long on F24.
@@ -3529,7 +3542,7 @@
   }
 
   function walkFighter(f, dt) {
-    if (f.rooted > 0 || f.pullT > 0 || (f.stun || 0) > 0 || isAirborne(f) || isDowned(f)) {
+    if (f.rooted > 0 || f.pullT > 0 || (f.stun || 0) > 0 || isAirborne(f) || isDowned(f) || castingLocked(f) || f.dashT > 0) {
       f.gait = "idle";
       return;
     }
@@ -3630,12 +3643,16 @@
       wantX = -dx / dist;
       wantY = (Math.random() - 0.5) * 0.4;
     }
-        f.aiIx = wantX;
+        if (castingLocked(f) || f.dashT > 0 || f.shield > 0 || f.shieldWind > 0) {
+      f.aiIx = 0;
+      f.aiIy = 0;
+      return;
+    }
+    f.aiIx = wantX;
     f.aiIy = wantY;
     // pages31i: AI 跑动跟位移朝向，停步面朝对手
     if (Math.abs(wantX) > 0.15) f.facing = wantX > 0 ? 1 : -1;
     else faceTowardFoe(f);
-    if (f.busy > 0 || f.dashT > 0 || f.shield > 0 || f.shieldWind > 0) return;
     if (f.aiThink > 0) return;
     // pages29: practice default = no auto-attack (player triggers enemy skills manually)
     if (gameMode === "practice" && !practiceAutoAttack) return;
@@ -4139,12 +4156,7 @@
 
       // Skill casters / Pain actions keep both feet on the ground.
       if (f.pullOn || f.repulseOn || (f.shieldWind || 0) > 0) plantCaster(f);
-      if (isPain(f) && (f.busy > 0 || f.anim === "combo" || f.anim === "kick" || f.anim === "rod" || f.anim === "push" || f.anim === "back" || f.anim === "pull" || f.anim === "cast")) plantCaster(f);
-      if (isTanjiro(f) && (f.busy > 0 || (f.ult2Phase || 0) > 0 || (f.counterT || 0) > 0 || f.anim.indexOf("t_") === 0)) plantCaster(f);
-      if (isGojo(f) && (f.busy > 0 || (f.anim && f.anim.indexOf("g_") === 0))) plantCaster(f);
-      if (isLuffy(f) && (f.busy > 0 || (f.anim && f.anim.indexOf("l_") === 0))) plantCaster(f);
-      if (isIchigo(f) && (f.busy > 0 || (f.anim && f.anim.indexOf("i_") === 0))) plantCaster(f);
-      if (isFushiguro(f) && (f.busy > 0 || (f.anim && f.anim.indexOf("f_") === 0))) plantCaster(f);
+      if (castingLocked(f)) plantCaster(f);
       if (isFushiguro(f)) updateFushiSkills(f, dt);
       if (isGojo(f)) updateGojoSkills(f, dt);
       if (isIchigo(f)) updateIchigoSkills(f, dt);
@@ -4260,7 +4272,7 @@
           else f.anim = "idle";
         }
       } else {
-        if (!koId && f.busy <= 0) walkFighter(f, dt);
+        if (!koId && !castingLocked(f)) walkFighter(f, dt);
         else if (!koId && f.anim === "punch" && f.animT < f.animDur * 0.45) {
           var lunge = clampSpot(f.x + f.facing * 560 * dt, f.y);
           f.x = lunge.x;
@@ -5497,8 +5509,9 @@
     if (!img || !img.complete || !img.naturalWidth) return null;
     return img;
   }
-  // pages30m: gojo art faces RIGHT → nativeDir +1
+  // pages31j: 按图集源朝向；idle/受击/倒地/苍/折返/领域朝左 → -1，其余朝右 +1
   function gojoNativeDir(set) {
+    if (set === gojo.idle || set === gojo.hitstun || set === gojo.knock || set === gojo.blue || set === gojo.blink || set === gojo.domain) return -1;
     return 1;
   }
   function drawGojoAt(x, groundY, facing, set, index, alpha, tilt, shakeAmp) {
@@ -5652,8 +5665,9 @@
     if (!img || !img.complete || !img.naturalWidth) return null;
     return img;
   }
-  // pages30t: luffy art faces RIGHT → nativeDir +1
+  // pages31j: attack/balloon/hitstun/knock/gear2Idle 源朝左 → -1
   function luffyNativeDir(set) {
+    if (set === luffy.atk || set === luffy.balloon || set === luffy.hitstun || set === luffy.knock || set === luffy.gear2Idle) return -1;
     return 1;
   }
   function drawLuffyAt(x, groundY, facing, set, index, alpha, tilt, shakeAmp) {
@@ -5779,8 +5793,9 @@
     if (!img || !img.complete || !img.naturalWidth) return null;
     return img;
   }
-  // pages30y: ichigo art faces RIGHT → nativeDir +1
+  // pages31j: getsuga/block/knock 源朝左 → -1
   function ichigoNativeDir(set) {
+    if (set === ichigo.getsuga || set === ichigo.block || set === ichigo.knock) return -1;
     return 1;
   }
   function drawIchigoAt(x, groundY, facing, set, index, alpha, tilt, shakeAmp) {
@@ -5914,8 +5929,9 @@
     if (!img || !img.complete || !img.naturalWidth) return null;
     return img;
   }
-  // pages31d: fushiguro art faces RIGHT → nativeDir +1
+  // pages31j: idle/hitstun/knock/atk/dogs/elephant 源朝左 → -1；run/nue/shadow/domain 朝右 +1
   function fushiNativeDir(set) {
+    if (set === fushiguro.idle || set === fushiguro.hitstun || set === fushiguro.knock || set === fushiguro.atk || set === fushiguro.dogs || set === fushiguro.elephant) return -1;
     return 1;
   }
   function drawFushiAt(x, groundY, facing, set, index, alpha, tilt, shakeAmp, scaleMul, srcOx) {
