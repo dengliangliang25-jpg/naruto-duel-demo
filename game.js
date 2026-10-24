@@ -71,7 +71,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 30s stall → retry UI.
-  var ASSET_V = "pages31u";
+  var ASSET_V = "pages31v";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [], ichigo: [], fushiguro: [], denji: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 6;
@@ -585,7 +585,11 @@
     juubiTransform: loadLoosePng("obito_juubi/juubi_transform", 6, "obito"),
     juubiAtk: loadLoosePng("obito_juubi/juubi_atk", 6, "obito"),
     juubiBlock: loadLoosePng("obito_juubi/juubi_block", 6, "obito"),
-    juubiSpin: loadLoosePng("obito_juubi/juubi_spin", 8, "obito")
+    juubiSpin: loadLoosePng("obito_juubi/juubi_spin", 8, "obito"),
+    // pages31v: 专属受击/击飞/落地目录就绪后再 loadLoosePng；现回落普通带土 knock
+    juubiHit: [],
+    juubiKnock: [],
+    juubiLand: []
   };
   var portraitImgs = {};
   (function loadPortraits() {
@@ -3050,7 +3054,7 @@
     f.hyperArmor = Math.max(f.hyperArmor || 0, 0.2);
     f.dashDelay = start;
     f.dashT = start + spinT;
-    f.dashVx = f.facing * (140 / spinT);
+    f.dashVx = f.facing * (280 / spinT); // pages31v: 十尾R水平位移×2（原140）
     f.dashVy = 0;
     f.dashHit = true;
     f.dashDmg = 0;
@@ -5513,8 +5517,11 @@
       sy = (Math.random() * 2 - 1) * shakeAmp * 2.5;
       sc = sc * (1 - Math.min(0.015, shakeAmp * 0.05));
     }
-    var dw = img.width * sc;
-    var dh = img.height * sc;
+    // pages31v: prefer atlas crop sw/sh — knock_11..16 曾误标 w/h=225×257 导致放大
+    var iw = (img.sw > 0 ? img.sw : img.width);
+    var ih = (img.sh > 0 ? img.sh : img.height);
+    var dw = iw * sc;
+    var dh = ih * sc;
     ctx.save();
     // Plant canvas bottom on ground; empty top padding of knock cells does not shrink the body.
     ctx.translate(x + sx, groundY + 2 + (footDrop || 0) + sy);
@@ -5566,20 +5573,55 @@
       if (ujs < 0) ujs = 0; if (ujs > 0.999) ujs = 0.999;
       idx = Math.min(7, Math.floor(ujs * 8));
       useJuubiScale = true;
-    } else if ((f.knockPhase === "air" || isAirborne(f)) && obito.knock && obito.knock[0] && obito.knock[0].complete) {
-      set = obito.knock;
-      idx = Math.min(10, Math.floor((f.knockT || 0) * 18));
-    } else if ((f.knockPhase === "down" || isDowned(f) || (f.getUpT || 0) > 0 || (f.downT || 0) > 0) && obito.knock && obito.knock[0] && obito.knock[0].complete) {
-      set = obito.knock;
-      var kt = f.knockT || 0;
-      if ((f.getUpT || 0) > 0) {
-        // Hold last downed frames through get-up — never fall back to tilted idle
-        idx = 15;
-      } else if (kt < 0.12) idx = 11;
-      else if (kt < 0.28) idx = 12;
-      else if (kt < 0.45) idx = 13;
-      else if (kt < 0.65) idx = 14;
-      else idx = 15;
+    } else if ((f.knockPhase === "air" || isAirborne(f))) {
+      // pages31v: 十尾有专属击飞帧则用；否则套普通带土 knock 空中段
+      if (f.juubi && obito.juubiKnock && obito.juubiKnock[0] && obito.juubiKnock[0].complete && obito.juubiKnock[0].naturalWidth > 0) {
+        set = obito.juubiKnock;
+        useJuubiScale = true;
+        idx = Math.min(5, Math.floor((f.knockT || 0) * 10));
+      } else if (obito.knock && obito.knock[0] && obito.knock[0].complete) {
+        set = obito.knock;
+        idx = Math.min(10, Math.floor((f.knockT || 0) * 18));
+      }
+    } else if ((f.knockPhase === "down" || isDowned(f) || (f.getUpT || 0) > 0 || (f.downT || 0) > 0)) {
+      // pages31v: 十尾落地优先 juubi_knock_land；否则普通带土 knock 11–15
+      if (f.juubi && obito.juubiLand && obito.juubiLand[0] && obito.juubiLand[0].complete && obito.juubiLand[0].naturalWidth > 0) {
+        set = obito.juubiLand;
+        useJuubiScale = true;
+        var ktJ = f.knockT || 0;
+        if ((f.getUpT || 0) > 0) idx = 5;
+        else if (ktJ < 0.12) idx = 0;
+        else if (ktJ < 0.28) idx = 1;
+        else if (ktJ < 0.45) idx = 2;
+        else if (ktJ < 0.65) idx = 3;
+        else idx = 4;
+      } else if (obito.knock && obito.knock[0] && obito.knock[0].complete) {
+        set = obito.knock;
+        var kt = f.knockT || 0;
+        if ((f.getUpT || 0) > 0) {
+          // Hold last downed frames through get-up — never fall back to tilted idle
+          idx = 15;
+        } else if (kt < 0.12) idx = 11;
+        else if (kt < 0.28) idx = 12;
+        else if (kt < 0.45) idx = 13;
+        else if (kt < 0.65) idx = 14;
+        else idx = 15;
+      }
+    } else if (f.hitLight && (f.stun || 0) > 0) {
+      // pages31v: 轻受击 — 十尾有专属则用；否则套普通带土 knock 前段 0–2
+      if (f.juubi && obito.juubiHit && obito.juubiHit[0] && obito.juubiHit[0].complete && obito.juubiHit[0].naturalWidth > 0) {
+        set = obito.juubiHit;
+        useJuubiScale = true;
+        var hsJ = Math.min(1, (f.stun || 0) / 0.4);
+        idx = Math.min(5, Math.floor((1 - hsJ) * 6));
+      } else if (obito.knock && obito.knock[0] && obito.knock[0].complete) {
+        set = obito.knock;
+        var hs = Math.min(1, (f.stun || 0) / 0.4);
+        idx = Math.min(2, Math.floor((1 - hs) * 3));
+      } else {
+        set = obito.idle;
+        idx = 0;
+      }
     } else if (reacting) {
       set = obito.idle;
       idx = 0;
@@ -5625,7 +5667,7 @@
       }
     }
     var phased = f.phase > 0;
-    var knocking = set === obito.knock;
+    var knocking = set === obito.knock || set === obito.juubiKnock || set === obito.juubiLand || set === obito.juubiHit;
     var gettingUp = (f.getUpT || 0) > 0 || (f.downT || 0) > 0 || !!f.knockPhase || isDowned(f);
     // pages30d: knockdown/air/getUp stay fully opaque — never invuln blink / tilted idle ghost
     if (knocking || gettingUp) {
