@@ -71,7 +71,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 30s stall → retry UI.
-  var ASSET_V = "pages31w";
+  var ASSET_V = "pages31x";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [], ichigo: [], fushiguro: [], denji: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 6;
@@ -609,7 +609,7 @@
   // pages31p: 十尾 v2 画布 640×560、FOOT_Y=544、人体≈430；人对齐普通带土；黑球随放大；合层已含紫弧/月牙盾不叠 fx
   var juubiFootPad = 16; // 560 - 544
   var juubiBodyH = 430;
-  var juubiScale = (180 * obitoScale) / juubiBodyH;
+  var juubiScale = (180 * obitoScale) / juubiBodyH * 1.2; // pages31x: 十尾人体比常态再大 20%
   var painScale = 180 * obitoScale / 143;
   // Body frames were rekeyed at 3x. Draw scale is divided so on-screen height
   // stays the same. painIdleFootPad is still the pre-upscale pad (6); the PNGs
@@ -821,8 +821,17 @@
   var denjiBodyH = 380 * denjiScale;
 
   var clothFps = 9;
-  // pages31w: 开战站立静止 — idle 定在第 0 帧，不再循环出场/飘布动画
-  function idleStillIdx(n) { return 0; }
+  // pages31x: 开场 idle 只播一轮，之后定帧静止（禁止循环出场）
+  var IDLE_INTRO_SEC = 0.85;
+  function idleStillIdx(f, n) {
+    if (!n || n < 1) return 0;
+    if (!f) return 0;
+    if (f.idleIntroAt == null) f.idleIntroAt = time;
+    var u = (time - f.idleIntroAt) / IDLE_INTRO_SEC;
+    if (u >= 1) return 0;
+    if (u < 0) u = 0;
+    return Math.min(n - 1, Math.floor(u * n));
+  }
   function plantCaster(f) {
     f.airH = 0;
     f.airV = 0;
@@ -1458,6 +1467,7 @@
     f.hp = f.maxHp;
     f.chakra = f.maxChakra;
     f.anim = "idle";
+    f.idleIntroAt = null; // pages31x: 每回重播一轮出场
     f.busy = 0;
     f.dashT = 0;
     f.flash = 0;
@@ -5659,11 +5669,11 @@
       idx = Math.floor(time * 11) % 8;
     } else if (f.juubi && obito.juubiIdle && obito.juubiIdle[0] && obito.juubiIdle[0].complete) {
       set = obito.juubiIdle;
-      idx = idleStillIdx(8);
+      idx = idleStillIdx(f, 8);
       useJuubiScale = true;
     } else {
       set = obito.idle;
-      idx = idleStillIdx(8);
+      idx = idleStillIdx(f, 8);
     }
     var phased = f.phase > 0;
     var knocking = set === obito.knock || set === obito.juubiKnock || set === obito.juubiLand || set === obito.juubiHit;
@@ -5863,7 +5873,7 @@
       idx = Math.floor(time * 11) % 6;
     } else {
       set = pain.idle;
-      idx = idleStillIdx(8);
+      idx = idleStillIdx(f, 8);
     }
     if (f.invuln > 0 && !isDowned(f) && !isAirborne(f) && Math.sin(time * 40) > 0) alpha *= 0.45;
     var footDrop = 0;
@@ -6067,7 +6077,7 @@
       idx = Math.floor(time * 10) % 8;
     } else {
       set = tanjiro.idle;
-      idx = idleStillIdx(8);
+      idx = idleStillIdx(f, 8);
     }
     if (f.invuln > 0 && !isDowned(f) && !isAirborne(f) && Math.sin(time * 40) > 0) alpha *= 0.45;
     // pages25: small forward lunge on sword swings so the strike reads even with subtle frames
@@ -6270,7 +6280,7 @@
       idx = Math.floor(time * 10) % 8;
     } else {
       set = gojo.idle;
-      idx = idleStillIdx(8);
+      idx = idleStillIdx(f, 8);
     }
     if (f.phase > 0) alpha = 0.55;
     else if (f.invuln > 0 && !isDowned(f) && !isAirborne(f) && Math.sin(time * 40) > 0) alpha *= 0.45;
@@ -6386,7 +6396,7 @@
     } else {
       if (f.gear2 && luffy.gear2Idle && luffy.gear2Idle[0] && luffy.gear2Idle[0].complete) set = luffy.gear2Idle;
       else set = luffy.idle;
-      idx = idleStillIdx(8);
+      idx = idleStillIdx(f, 8);
     }
     if (f.invuln > 0 && !isDowned(f) && !isAirborne(f) && Math.sin(time * 40) > 0) alpha *= 0.45;
     if (f.gear2) alpha = Math.min(1, alpha * 1.05);
@@ -6515,7 +6525,7 @@
     } else {
       if (f.bankai && ichigo.bankaiIdle && ichigo.bankaiIdle[0] && ichigo.bankaiIdle[0].complete) set = ichigo.bankaiIdle;
       else set = ichigo.idle;
-      idx = idleStillIdx(8);
+      idx = idleStillIdx(f, 8);
     }
     if (f.invuln > 0 && !isDowned(f) && !isAirborne(f) && Math.sin(time * 40) > 0) alpha *= 0.45;
     if (f.bankai) alpha = Math.min(1, alpha * 1.05);
@@ -6630,7 +6640,7 @@
       idx = Math.floor(time * 10) % 8;
     } else {
       set = fushiguro.idle;
-      idx = idleStillIdx(8);
+      idx = idleStillIdx(f, 8);
     }
     if (f.invuln > 0 && skillKey !== "shadow" && !isDowned(f) && !isAirborne(f) && Math.sin(time * 40) > 0) alpha *= 0.45;
     var drawAir = (f.airH || 0);
@@ -6752,7 +6762,7 @@
       idx = Math.floor(time * 10) % 8;
     } else {
       set = denji.idle;
-      idx = idleStillIdx(8);
+      idx = idleStillIdx(f, 8);
     }
     if (f.invuln > 0 && !isDowned(f) && !isAirborne(f) && Math.sin(time * 40) > 0) alpha *= 0.45;
     if (f.denjiRage) alpha = Math.min(1, alpha * 1.05);
