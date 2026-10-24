@@ -71,7 +71,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 30s stall → retry UI.
-  var ASSET_V = "pages31q";
+  var ASSET_V = "pages31r";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [], ichigo: [], fushiguro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 6;
@@ -574,12 +574,13 @@
     punch: loadStrip("punch", 8),
     cloth: loadStrip("cloth", 12, "obito/cloth_float"),
     knock: loadStrip("knock", 16, "obito/knockdown"),
-    // pages31p: 十尾 v2 全套 640×560（idle/run/transform/atk/block）；不挂 spin；不叠 fx_juubi_slash
+    // pages31r: 十尾 v2 全套 640×560（idle/run/transform/atk/block/spin）；不叠 fx_juubi_slash
     juubiIdle: loadLoosePng("obito_juubi/juubi_idle", 8, "obito"),
     juubiRun: loadLoosePng("obito_juubi/juubi_run", 8, "obito"),
     juubiTransform: loadLoosePng("obito_juubi/juubi_transform", 6, "obito"),
     juubiAtk: loadLoosePng("obito_juubi/juubi_atk", 6, "obito"),
-    juubiBlock: loadLoosePng("obito_juubi/juubi_block", 6, "obito")
+    juubiBlock: loadLoosePng("obito_juubi/juubi_block", 6, "obito"),
+    juubiSpin: loadLoosePng("obito_juubi/juubi_spin", 8, "obito")
   };
   var portraitImgs = {};
   (function loadPortraits() {
@@ -2172,6 +2173,19 @@
       castObitoJuubiBlock(f);
       return;
     }
+    // pages31r: 十尾形态内 R = 红触手回旋（覆盖常态传送）
+    if (id === "tele" && isObito(f) && f.juubi) {
+      if ((f.stun || 0) > 0 || isAirborne(f)) { bufferCast(f, id); return; }
+      if (sk.cd > 0) return;
+      if (f.busy > 0 || f.dashT > 0 || (f.counterT || 0) > 0) { bufferCast(f, id); return; }
+      var spinCost = sk.cost || 20;
+      if ((f.chakra || 0) < spinCost) return;
+      faceTowardFoe(f);
+      f.chakra -= spinCost;
+      applySkillCd(f, sk, id);
+      castObitoJuubiSpin(f);
+      return;
+    }
     if (id === "phase" || id === "needle") {
       faceTowardFoe(f);
       castNeedle(f);
@@ -2888,6 +2902,15 @@
       f.skills.phase.max = 0;
       f.skills.phase.cd = 0;
     }
+    if (f.skills && f.skills.tele) {
+      f._juubiTeleName = f.skills.tele.name;
+      f._juubiTeleCost = f.skills.tele.cost;
+      f._juubiTeleMax = f.skills.tele.max;
+      f.skills.tele.name = "红触手回旋";
+      f.skills.tele.cost = 20;
+      f.skills.tele.max = 3.5;
+      f.skills.tele.cd = 0;
+    }
     spawnFloater(f.x, f.y - 190, "十尾人柱力", "#c9a6ff");
   }
   function exitObitoJuubi(f) {
@@ -2903,6 +2926,11 @@
       if (f._juubiPhaseName) f.skills.phase.name = f._juubiPhaseName;
       if (f._juubiPhaseCost != null) f.skills.phase.cost = f._juubiPhaseCost;
       if (f._juubiPhaseMax != null) f.skills.phase.max = f._juubiPhaseMax;
+    }
+    if (f.skills && f.skills.tele) {
+      if (f._juubiTeleName) f.skills.tele.name = f._juubiTeleName;
+      if (f._juubiTeleCost != null) f.skills.tele.cost = f._juubiTeleCost;
+      if (f._juubiTeleMax != null) f.skills.tele.max = f._juubiTeleMax;
     }
     spawnFloater(f.x, f.y - 160, "十尾结束", "#a08090");
   }
@@ -2932,6 +2960,33 @@
     f.blockT = 0.9;
     spawnFloater(f.x, f.y - 170, "格挡", "#a080ff");
     // pages31n: 去掉多余淡紫扩散环，只留 juubi_block 帧内月牙盾
+  }
+  // pages31r: 十尾形态内 R — 红触手回旋（合层 juubi_spin×8，不叠 fx）
+  function castObitoJuubiSpin(f) {
+    plantCaster(f);
+    var start = 0.12;
+    var spinT = 0.55;
+    f.anim = "o_juubi_spin";
+    f.animT = 0;
+    f.animDur = start + spinT;
+    f.busy = f.animDur;
+    f.hitPending = false;
+    f.hitPending2 = false;
+    f.armor = Math.max(f.armor || 0, 0.2);
+    f.hyperArmor = Math.max(f.hyperArmor || 0, 0.2);
+    f.dashDelay = start;
+    f.dashT = start + spinT;
+    f.dashVx = f.facing * (140 / spinT);
+    f.dashVy = 0;
+    f.dashHit = true;
+    f.dashDmg = 0;
+    f.meleeDmg = boosted(f, 8);
+    f.meleeRange = 160;
+    f.juubiSpinHits = 0;
+    f.juubiSpinMaxHits = 4;
+    f.juubiSpinNextHit = start;
+    f.juubiSpinHitGap = spinT / 4;
+    spawnFloater(f.x, f.y - 170, "红触手回旋", "#ff4060");
   }
   function doObitoJuubiBlockCounter(f) {
     var opp = other(f);
@@ -3670,6 +3725,9 @@
     } else if (f.anim === "o_juubi_atk") {
       var rngJ = f.meleeRange || 150;
       if (inFront && dist < rngJ) hurt(opp, f.meleeDmg || boosted(f, 10), "#c9a6ff", { attacker: f });
+    } else if (f.anim === "o_juubi_spin") {
+      var rngS = f.meleeRange || 160;
+      if (dist < rngS) hurt(opp, f.meleeDmg || boosted(f, 8), "#ff4060", { attacker: f });
     } else if (f.anim === "thrust") {
       if (inFront && dist < 150) hurt(opp, 9, right.palette.glow);
     } else if (f.anim === "cleave") {
@@ -4428,11 +4486,28 @@
           }
         }
         }
+        // pages31r: juubi spin anim + multi-hit must advance during dash (dash covers full spin)
+        if (f.anim === "o_juubi_spin") {
+          f.animT += dt;
+          if ((f.juubiSpinHits || 0) < (f.juubiSpinMaxHits || 4)) {
+            while ((f.juubiSpinHits || 0) < (f.juubiSpinMaxHits || 4) && f.animT >= (f.juubiSpinNextHit || 0)) {
+              resolveMelee(f);
+              f.juubiSpinHits = (f.juubiSpinHits || 0) + 1;
+              f.juubiSpinNextHit = (f.juubiSpinNextHit || 0) + (f.juubiSpinHitGap || 0.14);
+            }
+          }
+          if (f.animT >= f.animDur) {
+            var juubiSpinDone = true;
+            f.anim = "idle";
+            faceTowardFoe(f);
+            if (f.juubiPendingExit) exitObitoJuubi(f);
+          }
+        }
         if (f.dashT <= 0) {
           f.dashT = 0;
           f.dashDelay = 0;
           f.dashDmg = 0;
-          if (f.anim === "t_water4" || f.anim === "i_flash") { /* keep anim until animDur */ }
+          if (f.anim === "t_water4" || f.anim === "i_flash" || f.anim === "o_juubi_spin") { /* keep anim until animDur */ }
           else f.anim = "idle";
         }
       } else {
@@ -4472,6 +4547,13 @@
           f.ult2T = (f.ult2T || 0) + dt;
           updateTanjiroUlt2(f, dt);
         }
+        if (f.anim === "o_juubi_spin" && (f.juubiSpinHits || 0) < (f.juubiSpinMaxHits || 4)) {
+          while ((f.juubiSpinHits || 0) < (f.juubiSpinMaxHits || 4) && f.animT >= (f.juubiSpinNextHit || 0)) {
+            resolveMelee(f);
+            f.juubiSpinHits = (f.juubiSpinHits || 0) + 1;
+            f.juubiSpinNextHit = (f.juubiSpinNextHit || 0) + (f.juubiSpinHitGap || 0.14);
+          }
+        }
         if (f.hitPending && f.animT >= f.hitAt) {
           f.hitPending = false;
           if (f.anim === "combo") spawnComboFlash(f);
@@ -4500,7 +4582,7 @@
             f.ult2Phase = 0;
           }
           // pages31n: 十尾 anim 播完后再执行蓝尽退形
-          var juubiAnimDone = (f.anim === "o_juubi_atk" || f.anim === "o_juubi_block" || f.anim === "o_juubi");
+          var juubiAnimDone = (f.anim === "o_juubi_atk" || f.anim === "o_juubi_block" || f.anim === "o_juubi" || f.anim === "o_juubi_spin");
           f.anim = "idle";
           faceTowardFoe(f);
           if (juubiAnimDone && f.juubiPendingExit) exitObitoJuubi(f);
@@ -5189,6 +5271,12 @@
       var ujb = f.animDur > 0 ? f.animT / f.animDur : 1;
       if (ujb < 0) ujb = 0; if (ujb > 0.999) ujb = 0.999;
       idx = Math.min(5, Math.floor(ujb * 6));
+      useJuubiScale = true;
+    } else if (f.anim === "o_juubi_spin" && obito.juubiSpin && obito.juubiSpin[0] && obito.juubiSpin[0].complete) {
+      set = obito.juubiSpin;
+      var ujs = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (ujs < 0) ujs = 0; if (ujs > 0.999) ujs = 0.999;
+      idx = Math.min(7, Math.floor(ujs * 8));
       useJuubiScale = true;
     } else if ((f.knockPhase === "air" || isAirborne(f)) && obito.knock && obito.knock[0] && obito.knock[0].complete) {
       set = obito.knock;
