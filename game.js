@@ -71,7 +71,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 30s stall → retry UI.
-  var ASSET_V = "pages31l";
+  var ASSET_V = "pages31m";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [], ichigo: [], fushiguro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 6;
@@ -577,7 +577,10 @@
     // pages31l: 十尾人柱力 — 独立 PNG，进 ASSET_GROUPS.obito
     juubiIdle: loadLoosePng("obito_juubi/juubi_idle", 8, "obito"),
     juubiRun: loadLoosePng("obito_juubi/juubi_run", 8, "obito"),
-    juubiTransform: loadLoosePng("obito_juubi/juubi_transform", 6, "obito")
+    juubiTransform: loadLoosePng("obito_juubi/juubi_transform", 6, "obito"),
+    // pages31m: 十尾形态内 Q 杖斩 / E 格挡（紫弧已烤进 juubi_atk，不叠 fx）
+    juubiAtk: loadLoosePng("obito_juubi/juubi_atk", 6, "obito"),
+    juubiBlock: loadLoosePng("obito_juubi/juubi_block", 6, "obito")
   };
   var portraitImgs = {};
   (function loadPortraits() {
@@ -1136,6 +1139,9 @@
     f.gear2 = false;
     f.bankai = false;
     f.juubi = false;
+    f.blockT = 0;
+    f.juubiBlockCount = 0;
+    f.juubiBlockWin = 0;
   }
 
   // pages20: fixed slots on both sides. Non-scroll skills fill slots 0..5 in order;
@@ -1461,6 +1467,8 @@
     f.juubi = false;
     f.balloonT = 0;
     f.blockT = 0;
+    f.juubiBlockCount = 0;
+    f.juubiBlockWin = 0;
     if (f.baseMoveSpeed) f.moveSpeed = f.baseMoveSpeed;
   }
 
@@ -1552,6 +1560,15 @@
     if (koId || target.hp <= 0 || target.invuln > 0 || target.phase > 0 || target.shield > 0) return false;
     if (isDowned(target) && !opts.fromImpact) return false;
     amount = Math.max(1, Math.round(amount * 2 / 3));
+    // pages31m: 十尾格挡成功 ≥70% 减伤；连成 3 次瞬身身后杖斩
+    var juubiBlockOk = isObito(target) && target.juubi && (target.blockT || 0) > 0 && !opts.fromImpact && !opts.ignoreArmor;
+    if (juubiBlockOk) {
+      amount = Math.max(1, Math.round(amount * 0.3));
+      if ((target.juubiBlockWin || 0) < time) target.juubiBlockCount = 0;
+      target.juubiBlockCount = (target.juubiBlockCount || 0) + 1;
+      target.juubiBlockWin = time + 4;
+      spawnFloater(target.x, target.y - 190 - (target.airH || 0), "格挡 " + target.juubiBlockCount + "/3", "#c9a6ff");
+    }
     var hyper = (target.hyperArmor || 0) > 0 && !opts.ignoreArmor;
     target.hp = Math.max(0, target.hp - amount);
     target.flash = 0;
@@ -1569,6 +1586,17 @@
       if (isTanjiro(target) && (target.barrierT || 0) > 0 && !target.barrierUsed) {
         var atkH = opts.attacker || other(target);
         triggerTanjiroCounter(target, atkH);
+      }
+      if (target.hp <= 0) onFighterKilled(target);
+      return true;
+    }
+    if (juubiBlockOk) {
+      target.flash = 0;
+      target.hurt = 0.1;
+      if (target.juubiBlockCount >= 3) {
+        target.juubiBlockCount = 0;
+        target.juubiBlockWin = 0;
+        doObitoJuubiBlockCounter(target);
       }
       if (target.hp <= 0) onFighterKilled(target);
       return true;
@@ -2131,6 +2159,14 @@
       castShield(f, 1);
       return;
     }
+    // pages31m: 十尾形态内 E = 无冷格挡（不耗蓝、不进虚化）
+    if (id === "phase" && isObito(f) && f.juubi) {
+      if ((f.stun || 0) > 0 || isAirborne(f)) { bufferCast(f, id); return; }
+      if (f.busy > 0 || f.dashT > 0 || (f.counterT || 0) > 0) { bufferCast(f, id); return; }
+      faceTowardFoe(f);
+      castObitoJuubiBlock(f);
+      return;
+    }
     if (id === "phase" || id === "needle") {
       faceTowardFoe(f);
       castNeedle(f);
@@ -2171,7 +2207,9 @@
     if (id !== "tele" && id !== "back" && id !== "swap" && id !== "balloon") faceTowardFoe(f);
     f.chakra -= cost;
     applySkillCd(f, sk, id);
-    if (id === "punch") beginMelee(f, "punch", 0.56, 0.24);
+    // pages31m: 十尾形态内 Q = 杖斩（不耗蓝，CD≈0.91）
+    if (id === "punch" && isObito(f) && f.juubi) castObitoJuubiAtk(f);
+    else if (id === "punch") beginMelee(f, "punch", 0.56, 0.24);
     else if (id === "slash") beginMelee(f, "slash", 0.28, 0.08);
     else if (id === "thrust") beginMelee(f, "combo", 0.72, 0.22, 0.48);
     else if (id === "cleave") beginMelee(f, "kick", 0.62, 0.34);
@@ -2830,13 +2868,86 @@
     f.armor = Math.max(f.armor || 0, 0.35);
     f.hitPending = false;
     f.juubi = true;
+    f.juubiBlockCount = 0;
+    f.juubiBlockWin = 0;
+    if (f.skills && f.skills.punch) {
+      f._juubiPunchName = f.skills.punch.name;
+      f.skills.punch.name = "杖斩";
+    }
+    if (f.skills && f.skills.phase) {
+      f._juubiPhaseName = f.skills.phase.name;
+      f._juubiPhaseCost = f.skills.phase.cost;
+      f._juubiPhaseMax = f.skills.phase.max;
+      f.skills.phase.name = "格挡";
+      f.skills.phase.cost = 0;
+      f.skills.phase.max = 0;
+      f.skills.phase.cd = 0;
+    }
     spawnFloater(f.x, f.y - 190, "十尾人柱力", "#c9a6ff");
   }
   function exitObitoJuubi(f) {
     if (!f.juubi) return;
     f.juubi = false;
     f.chakraLock = 0;
+    f.blockT = 0;
+    f.juubiBlockCount = 0;
+    f.juubiBlockWin = 0;
+    if (f.skills && f.skills.punch && f._juubiPunchName) f.skills.punch.name = f._juubiPunchName;
+    if (f.skills && f.skills.phase) {
+      if (f._juubiPhaseName) f.skills.phase.name = f._juubiPhaseName;
+      if (f._juubiPhaseCost != null) f.skills.phase.cost = f._juubiPhaseCost;
+      if (f._juubiPhaseMax != null) f.skills.phase.max = f._juubiPhaseMax;
+    }
     spawnFloater(f.x, f.y - 160, "十尾结束", "#a08090");
+  }
+  // pages31m: 十尾形态内 Q 杖斩
+  function castObitoJuubiAtk(f) {
+    f.anim = "o_juubi_atk";
+    f.animT = 0;
+    f.animDur = 0.56;
+    f.busy = 0.56;
+    f.hitPending = true;
+    f.hitAt = 0.24;
+    f.hitPending2 = false;
+    f.meleeDmg = boosted(f, 10);
+    f.meleeRange = 150;
+    f.meleeLaunch = false;
+    spawnFloater(f.x, f.y - 170, "杖斩", "#c9a6ff");
+  }
+  // pages31m: 十尾形态内 E 无冷格挡
+  function castObitoJuubiBlock(f) {
+    f.anim = "o_juubi_block";
+    f.animT = 0;
+    f.animDur = 0.9;
+    f.busy = 0.9;
+    f.hitPending = false;
+    f.hitPending2 = false;
+    f.armor = Math.max(f.armor || 0, 0.9);
+    f.blockT = 0.9;
+    spawnFloater(f.x, f.y - 170, "格挡", "#a080ff");
+    rings.push({ x: f.x + f.facing * 36, y: f.y - 120, life: 0.85, max: 0.85, color: "rgba(120,64,200,0.4)", r0: 18, r1: 90 });
+  }
+  function doObitoJuubiBlockCounter(f) {
+    var opp = other(f);
+    if (!opp || opp.hp <= 0) return;
+    ghosts.push({
+      x: f.x, y: f.y, facing: f.facing, life: 0.28, max: 0.28,
+      palette: f.palette, weapon: f.weapon, owner: f.id, kit: f.kit
+    });
+    var behind = (opp.facing || 1) < 0 ? 1 : -1;
+    var spot = clampSpot(opp.x + behind * 100, f.y);
+    spot.x = clamp(spot.x, 90, 1190);
+    f.x = spot.x;
+    f.y = spot.y;
+    f.facing = opp.facing || 1;
+    f.blockT = 0;
+    f.armor = 0;
+    f.busy = 0;
+    f.dashT = 0;
+    f.stun = 0;
+    spawnFloater(f.x, f.y - 190, "瞬身反击", "#e0c0ff");
+    castObitoJuubiAtk(f);
+    if (f.skills && f.skills.punch) applySkillCd(f, f.skills.punch, "punch");
   }
   function spawnBlackGetsuga(f) {
     var dir = f.facing < 0 ? -1 : 1;
@@ -3550,6 +3661,9 @@
     var inFront = Math.abs(ahead) < Math.PI * 0.72;
     if (f.anim === "slash" || f.anim === "punch") {
       if (inFront && dist < 124) hurt(opp, boosted(f, 8), f.palette.glow);
+    } else if (f.anim === "o_juubi_atk") {
+      var rngJ = f.meleeRange || 150;
+      if (inFront && dist < rngJ) hurt(opp, f.meleeDmg || boosted(f, 10), "#c9a6ff", { attacker: f });
     } else if (f.anim === "thrust") {
       if (inFront && dist < 150) hurt(opp, 9, right.palette.glow);
     } else if (f.anim === "cleave") {
@@ -4049,7 +4163,6 @@
       if (isGojo(f) && (f.domainT || 0) > 0) {
         f.domainT = Math.max(0, f.domainT - dt);
       if ((f.balloonT || 0) > 0) f.balloonT = Math.max(0, f.balloonT - dt);
-      if ((f.blockT || 0) > 0) f.blockT = Math.max(0, f.blockT - dt);
         if (f.domainT > 0) {
           var foesD = activeFighters(), di;
           for (di = 0; di < foesD.length; di++) {
@@ -4095,6 +4208,7 @@
         f.phase = Math.max(0, f.phase - dt);
         if (f.phase <= 0) f.phaseEye = 0;
       }
+      if ((f.blockT || 0) > 0) f.blockT = Math.max(0, f.blockT - dt);
       if (f.armor > 0) {
         f.armor -= dt;
         if (f.armor <= 0) {
@@ -5052,6 +5166,18 @@
       var uj = f.animDur > 0 ? f.animT / f.animDur : 1;
       if (uj < 0) uj = 0; if (uj > 0.999) uj = 0.999;
       idx = Math.min(5, Math.floor(uj * 6));
+      useJuubiScale = true;
+    } else if (f.anim === "o_juubi_atk" && obito.juubiAtk && obito.juubiAtk[0] && obito.juubiAtk[0].complete) {
+      set = obito.juubiAtk;
+      var uja = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (uja < 0) uja = 0; if (uja > 0.999) uja = 0.999;
+      idx = Math.min(5, Math.floor(uja * 6));
+      useJuubiScale = true;
+    } else if (f.anim === "o_juubi_block" && obito.juubiBlock && obito.juubiBlock[0] && obito.juubiBlock[0].complete) {
+      set = obito.juubiBlock;
+      var ujb = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (ujb < 0) ujb = 0; if (ujb > 0.999) ujb = 0.999;
+      idx = Math.min(5, Math.floor(ujb * 6));
       useJuubiScale = true;
     } else if ((f.knockPhase === "air" || isAirborne(f)) && obito.knock && obito.knock[0] && obito.knock[0].complete) {
       set = obito.knock;
