@@ -88,7 +88,7 @@
 
   // pages24: mirror hosts. Each file is pinned to one host (round-robin) so the browser
   // opens several independent connections; a retry moves the file to the next host.
-  var ASSET_COMMIT = "b9e14ff7ca60d5ebb0b84837c28c7e99f1563cf7";
+  var ASSET_COMMIT = "5dfafdfbe0fa749fb3808e878bbe223c6abea631";
   // pages31c: relative first; raw.githubusercontent before jsdelivr (China often stalls on jsDelivr).
   var MIRRORS = [""].concat(ASSET_COMMIT.indexOf("__") === 0 ? [] : [
     "https://raw.githubusercontent.com/dengliangliang25-jpg/naruto-duel-demo/" + ASSET_COMMIT + "/",
