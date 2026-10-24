@@ -71,8 +71,8 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 30s stall → retry UI.
-  var ASSET_V = "pages31t";
-  var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [], ichigo: [], fushiguro: [] };
+  var ASSET_V = "pages31u";
+  var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [], ichigo: [], fushiguro: [], denji: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 6;
   var MAX_TRIES = 10;
@@ -433,6 +433,10 @@
       bindArr(fushiguro.idle); bindArr(fushiguro.run); bindArr(fushiguro.hitstun); bindArr(fushiguro.knock);
       bindArr(fushiguro.atk); bindArr(fushiguro.dogs); bindArr(fushiguro.nue);
       bindArr(fushiguro.elephant); bindArr(fushiguro.shadow); bindArr(fushiguro.domain);
+    } else if (kitId === "denji") {
+      bindArr(denji.idle); bindArr(denji.run); bindArr(denji.hitstun); bindArr(denji.knock);
+      bindArr(denji.atk); bindArr(denji.chain); bindArr(denji.slam);
+      bindArr(denji.block); bindArr(denji.overheat); bindArr(denji.finisher);
     }
   }
   function registerKitSheets(kitId) {
@@ -452,7 +456,7 @@
 
   var cardImgs = {};
   (function loadCards() {
-    var ids = ["obito", "pain", "tanjiro", "gojo", "luffy", "ichigo", "fushiguro"];
+    var ids = ["obito", "pain", "tanjiro", "gojo", "luffy", "ichigo", "fushiguro", "denji"];
     var i;
     for (i = 0; i < ids.length; i++) {
       var img = regImg(new Image(), "cards/" + ids[i] + ".png", "core", "core");
@@ -528,7 +532,8 @@
     { id: "gojo", name: "五条悟", unlocked: true, blurb: "无下限 · 苍 · 赫 · 领域" },
     { id: "luffy", name: "路飞", unlocked: true, blurb: "橡胶 · 二档 · 金刚枪" },
     { id: "ichigo", name: "一护", unlocked: true, blurb: "斩月 · 天锁斩月 · 无月" },
-    { id: "fushiguro", name: "伏黑惠", unlocked: true, blurb: "影法术 · 玉犬 · 嵌合庭" }
+    { id: "fushiguro", name: "伏黑惠", unlocked: true, blurb: "影法术 · 玉犬 · 嵌合庭" },
+    { id: "denji", name: "电次", unlocked: true, blurb: "电锯 · 锁链 · 过热狂暴" }
   ];
   var floaters = [];
   var projectiles = [];
@@ -584,7 +589,7 @@
   };
   var portraitImgs = {};
   (function loadPortraits() {
-    var ids = ["obito", "pain", "tanjiro", "gojo", "luffy", "ichigo", "fushiguro"];
+    var ids = ["obito", "pain", "tanjiro", "gojo", "luffy", "ichigo", "fushiguro", "denji"];
     var i;
     for (i = 0; i < ids.length; i++) {
       var img = regImg(new Image(), "portraits/" + ids[i] + ".png", "core", "core");
@@ -793,6 +798,24 @@
   var fushiBodyW = 110 * fushiScale;
   var fushiBodyH = 378 * fushiScale;
 
+  // pages31u: 电次 — idle bodyCore≈380 @320×436 foot≈427；loose png（同十尾）无需 atlas
+  var denji = {
+    idle: loadLoosePng("denji/idle", 8, "denji"),
+    run: loadLoosePng("denji/run", 8, "denji"),
+    hitstun: loadLoosePng("denji/hitstun", 6, "denji"),
+    knock: loadLoosePng("denji/knockdown", 6, "denji"),
+    atk: loadLoosePng("denji/attack", 6, "denji"),
+    chain: loadLoosePng("denji/skill_chain", 6, "denji"),
+    slam: loadLoosePng("denji/skill_slam", 6, "denji"),
+    block: loadLoosePng("denji/skill_block", 6, "denji"),
+    overheat: loadLoosePng("denji/skill_overheat", 6, "denji"),
+    finisher: loadLoosePng("denji/skill_finisher", 6, "denji")
+  };
+  var denjiFootPad = 8;
+  var denjiScale = (180 * obitoScale) / 436;
+  var denjiBodyW = 150 * denjiScale;
+  var denjiBodyH = 380 * denjiScale;
+
   var clothFps = 9;
   function plantCaster(f) {
     f.airH = 0;
@@ -810,7 +833,7 @@
     if (f.pullOn || f.repulseOn || (f.shieldWind || 0) > 0) return true;
     var a = f.anim || "idle";
     if (a === "idle") return false;
-    if (a.indexOf("t_") === 0 || a.indexOf("g_") === 0 || a.indexOf("l_") === 0 || a.indexOf("i_") === 0 || a.indexOf("f_") === 0 || a.indexOf("o_") === 0) return true;
+    if (a.indexOf("t_") === 0 || a.indexOf("g_") === 0 || a.indexOf("l_") === 0 || a.indexOf("i_") === 0 || a.indexOf("f_") === 0 || a.indexOf("o_") === 0 || a.indexOf("d_") === 0) return true;
     if (a === "combo" || a === "kick" || a === "rod" || a === "push" || a === "back" || a === "pull" || a === "cast" || a === "slash" || a === "punch" || a === "thrust" || a === "cleave" || a === "tele" || a === "breath" || a === "fire" || a === "wave" || a === "swap") return true;
     return false;
   }
@@ -1088,6 +1111,21 @@
         shadow: { key: "C", name: "影换", role: "闪避", cd: 0, max: 1.56, cost: 10 },
         domain: { key: "V", name: "嵌合庭", role: "绝技", cd: 0, max: 20, cost: 0 }
       }
+    },
+    denji: {
+      name: "电次",
+      weapon: "blade",
+      speed: 510,
+      palette: { body: "#2a1814", trim: "#e8c070", glow: "#ff5040", deep: "#140c0a", hot: "#ff3030" },
+      order: ["atk", "chain", "slam", "block", "overheat", "finisher"],
+      skills: {
+        atk: { key: "Q", name: "电锯砍", role: "平A", cd: 0, max: 0.35, cost: 0 },
+        chain: { key: "E", name: "锁链拉", role: "控制", cd: 0, max: 3.4, cost: 18 },
+        slam: { key: "R", name: "锯刃滞空砸", role: "落击", cd: 0, max: 3.2, cost: 21 },
+        block: { key: "F", name: "电锯挡", role: "防御", cd: 0, max: 5, cost: 16 },
+        overheat: { key: "C", name: "过热狂暴", role: "叠加态", cd: 0, max: 1.2, cost: 15 },
+        finisher: { key: "V", name: "狂暴终结锯", role: "大招", cd: 0, max: 10, cost: 40 }
+      }
     }
   };
 
@@ -1146,6 +1184,9 @@
     f.gear2 = false;
     f.bankai = false;
     f.juubi = false;
+    f.denjiRage = false;
+    f.denjiHeat = 0;
+    f.denjiDrawAir = 0;
     f.blockT = 0;
     f.juubiBlockCount = 0;
     f.juubiBlockWin = 0;
@@ -1255,6 +1296,7 @@
   function isGojo(f) { return f && f.kit === "gojo"; }
   function isLuffy(f) { return f && f.kit === "luffy"; }
   function isIchigo(f) { return f && f.kit === "ichigo"; }
+  function isDenji(f) { return f && f.kit === "denji"; }
   function isFushiguro(f) { return f && f.kit === "fushiguro"; }
 
   function isCoop() { return gameMode === "coop"; }
@@ -1472,6 +1514,10 @@
     f.gear2 = false;
     f.bankai = false;
     f.juubi = false;
+    f.denjiRage = false;
+    f.denjiHeat = 0;
+    f.denjiDrawAir = 0;
+    f.hitPending3 = false;
     f.balloonT = 0;
     f.blockT = 0;
     f.juubiBlockCount = 0;
@@ -1578,6 +1624,14 @@
     }
     var hyper = (target.hyperArmor || 0) > 0 && !opts.ignoreArmor;
     target.hp = Math.max(0, target.hp - amount);
+    if (isDenji(target) && !target.denjiRage && amount > 0) {
+      var prevH = target.denjiHeat || 0;
+      target.denjiHeat = Math.min(3, prevH + 1);
+      if (target.denjiHeat !== prevH) {
+        spawnFloater(target.x, target.y - 200 - (target.airH || 0), "过热 " + target.denjiHeat + "/3", "#ff9040");
+      }
+      if (target.denjiHeat >= 3) enterDenjiRage(target);
+    }
     target.flash = 0;
     target.hurt = 0.14;
     target.hpChip = Math.min(target.maxHp, Math.max(target.hpChip != null ? target.hpChip : target.maxHp, target.hp + amount));
@@ -2142,6 +2196,19 @@
       }
       return;
     }
+    if (id === "finisher" && !(isDenji(f) && f.denjiRage)) {
+      if (humanControls(f) && performance.now() - (f.needRageHintAt || 0) > 600) {
+        f.needRageHintAt = performance.now();
+        spawnFloater(f.x, f.y - 190, "需过热狂暴（先按" + ((f.skills.overheat && f.skills.overheat.key) || "C") + "叠满）", "#ffb070");
+      }
+      return;
+    }
+    // pages31u: 狂暴中再按 C 免费提前关（可选）
+    if (id === "overheat" && isDenji(f) && f.denjiRage) {
+      if ((f.stun || 0) > 0 || isAirborne(f)) { bufferCast(f, id); return; }
+      exitDenjiRage(f);
+      return;
+    }
     if (id === "ult1" && isTanjiro(f) && f.fireForm) return;
     if (id === "gear2" && isLuffy(f) && f.gear2) return;
     if (id === "bankai" && isIchigo(f) && f.bankai) return;
@@ -2244,6 +2311,7 @@
       else if (isLuffy(f)) castLuffyAtk(f);
       else if (isIchigo(f)) castIchigoAtk(f);
       else if (isFushiguro(f)) castFushiAtk(f);
+      else if (isDenji(f)) castDenjiAtk(f);
       else castTanjiroAtk(f);
     }
     else if (id === "water2") castTanjiroWater2(f);
@@ -2265,7 +2333,6 @@
     else if (id === "spear") castLuffySpear(f);
     else if (id === "getsuga") castIchigoGetsuga(f);
     else if (id === "flash") castIchigoFlash(f);
-    else if (id === "block") castIchigoBlock(f);
     else if (id === "bankai") castIchigoBankai(f);
     else if (id === "mugetsu") castIchigoMugetsu(f);
     else if (id === "juubi") castObitoJuubi(f);
@@ -2273,6 +2340,12 @@
     else if (id === "nue") castFushiNue(f);
     else if (id === "elephant") castFushiElephant(f);
     else if (id === "shadow") castFushiShadow(f);
+    else if (id === "chain") castDenjiChain(f);
+    else if (id === "slam") castDenjiSlam(f);
+    else if (id === "block" && isDenji(f)) castDenjiBlock(f);
+    else if (id === "block") castIchigoBlock(f);
+    else if (id === "overheat") castDenjiOverheat(f);
+    else if (id === "finisher") castDenjiFinisher(f);
     else if (isTongLingId(id)) castScroll(f, id);
   }
 
@@ -3214,6 +3287,157 @@
       if (f.anim !== "g_red") f.fanwaveT = 0;
     }
   }
+  // pages31u: 电次全套 — Q砍 E链 R滞空砸 F挡 C过热狂暴 V狂暴终结锯（无二段清空）
+  function castDenjiAtk(f) {
+    f.anim = "d_atk";
+    f.animT = 0;
+    f.hitPending3 = false;
+    if (f.denjiRage) {
+      f.animDur = 0.68;
+      f.busy = 0.62;
+      f.hitPending = true;
+      f.hitAt = 0.1;
+      f.hitPending2 = true;
+      f.hitAt2 = 0.3;
+      f.hitPending3 = true;
+      f.hitAt3 = 0.5;
+      f.meleeDmg = boosted(f, 11);
+      f.meleeRange = 150;
+    } else {
+      f.animDur = 0.4;
+      f.busy = 0.36;
+      f.hitPending = true;
+      f.hitAt = 0.08;
+      f.hitPending2 = false;
+      f.meleeDmg = boosted(f, 13);
+      f.meleeRange = 140;
+    }
+    f.meleeLaunch = false;
+    rings.push({ x: f.x + f.facing * denjiBodyW * 0.5, y: f.y - denjiBodyH * 0.45, life: 0.28, max: 0.28, color: "rgba(255,80,60,0.7)", r0: 10, r1: denjiBodyW * 0.75 });
+  }
+  function castDenjiChain(f) {
+    f.anim = "d_chain";
+    f.animT = 0;
+    f.animDur = 0.88;
+    f.busy = 0.88;
+    f.hitPending = true;
+    f.hitAt = 0.18;
+    f.hitPending2 = false;
+    f.hitPending3 = false;
+    f.meleeDmg = boosted(f, 10);
+    f.meleeRange = 300;
+    f.meleeLaunch = false;
+    f.denjiChainHit = false;
+    rings.push({ x: f.x + f.facing * 80, y: f.y - denjiBodyH * 0.45, life: 0.4, max: 0.4, color: "rgba(232,192,112,0.55)", r0: 8, r1: 60 });
+  }
+  function castDenjiSlam(f) {
+    // 短跳滞空后下砸：水平≈80，砸半径≈120；禁止旧突进档
+    f.anim = "d_slam";
+    f.animT = 0;
+    f.animDur = 0.75;
+    f.busy = 0.75;
+    f.hitPending = false;
+    f.hitPending2 = false;
+    f.hitPending3 = false;
+    f.denjiSlamX0 = f.x;
+    f.denjiSlamHopped = false;
+    f.denjiSlamSmashed = false;
+    f.denjiDrawAir = 0;
+    f.dashDelay = 0.15;
+    f.dashT = 0.15 + 0.5;
+    f.dashVx = f.facing * (80 / 0.5);
+    f.dashVy = 0;
+    f.dashHit = true;
+    f.dashDmg = 0;
+    spawnFloater(f.x, f.y - 170, "滞空砸", "#ff5040");
+  }
+  function castDenjiBlock(f) {
+    f.anim = "d_block";
+    f.animT = 0;
+    f.animDur = 0.55;
+    f.busy = 0.55;
+    f.hitPending = false;
+    f.hitPending2 = false;
+    f.hitPending3 = false;
+    f.hyperArmor = Math.max(f.hyperArmor || 0, 0.55);
+    spawnFloater(f.x, f.y - 170, "电锯挡", "#e8c070");
+    rings.push({ x: f.x + f.facing * 28, y: f.y - denjiBodyH * 0.4, life: 0.5, max: 0.5, color: "rgba(255,80,60,0.4)", r0: 14, r1: denjiBodyW * 0.85 });
+  }
+  function enterDenjiRage(f) {
+    f.denjiRage = true;
+    f.hyperArmor = Math.max(f.hyperArmor || 0, 0.2);
+    f.moveSpeed = (f.baseMoveSpeed || 510) * 1.15;
+    spawnFloater(f.x, f.y - 190, "过热狂暴", "#ff3030");
+  }
+  function exitDenjiRage(f) {
+    if (!f.denjiRage) return;
+    f.denjiRage = false;
+    f.denjiHeat = 0;
+    f.moveSpeed = f.baseMoveSpeed || 510;
+    spawnFloater(f.x, f.y - 160, "狂暴结束", "#c08070");
+  }
+  function castDenjiOverheat(f) {
+    f.anim = "d_overheat";
+    f.animT = 0;
+    f.animDur = 0.4;
+    f.busy = 0.4;
+    f.hitPending = false;
+    f.hitPending2 = false;
+    f.hitPending3 = false;
+    f.hyperArmor = Math.max(f.hyperArmor || 0, 0.2);
+    f.denjiHeat = Math.min(3, (f.denjiHeat || 0) + 1);
+    spawnFloater(f.x, f.y - 170, "过热 " + f.denjiHeat + "/3", "#ff9040");
+    if (f.denjiHeat >= 3) enterDenjiRage(f);
+  }
+  function castDenjiFinisher(f) {
+    f.anim = "d_finisher";
+    f.animT = 0;
+    f.animDur = 0.72;
+    f.busy = 0.72;
+    f.hyperArmor = Math.max(f.hyperArmor || 0, 0.3);
+    f.hitPending = true;
+    f.hitAt = 0.12;
+    f.hitPending2 = false;
+    f.hitPending3 = false;
+    f.meleeDmg = boosted(f, 28);
+    f.meleeRange = 150;
+    f.meleeLaunch = true;
+    // 不清空、不退狂暴
+    spawnFloater(f.x, f.y - 190, "狂暴终结锯", "#ffe7a0");
+    rings.push({ x: f.x, y: f.y - denjiBodyH * 0.35, life: 0.55, max: 0.55, color: "rgba(255,60,40,0.7)", r0: 20, r1: 150 });
+  }
+  function updateDenjiSkills(f, dt) {
+    if (f.anim === "d_slam") {
+      var uHop = 0;
+      if (f.animT >= 0.15 && f.animT < 0.55) {
+        uHop = (f.animT - 0.15) / 0.4;
+        if (uHop > 1) uHop = 1;
+        f.denjiDrawAir = Math.sin(uHop * Math.PI) * 95;
+      } else if (f.animT >= 0.55) {
+        f.denjiDrawAir = Math.max(0, (f.denjiDrawAir || 0) - 520 * dt);
+      } else {
+        f.denjiDrawAir = 0;
+      }
+      if (!f.denjiSlamSmashed && f.animT >= 0.5) {
+        f.denjiSlamSmashed = true;
+        f.hyperArmor = Math.max(f.hyperArmor || 0, 0.15);
+        f.denjiDrawAir = Math.min(f.denjiDrawAir || 0, 20);
+        var foes = livingEnemies(f), i, t;
+        for (i = 0; i < foes.length; i++) {
+          t = foes[i];
+          var dx = t.x - f.x, dy = t.y - f.y;
+          if (dx * dx + dy * dy <= 120 * 120) {
+            hurt(t, boosted(f, 18), "#ff5040", { attacker: f, heavy: true });
+          }
+        }
+        rings.push({ x: f.x, y: f.y - 10, life: 0.35, max: 0.35, color: "rgba(255,80,40,0.65)", r0: 20, r1: 120 });
+      }
+      if (f.animT >= f.animDur) f.denjiDrawAir = 0;
+    } else if ((f.denjiDrawAir || 0) > 0 && f.anim !== "d_slam") {
+      f.denjiDrawAir = 0;
+    }
+  }
+
   function updateIchigoSkills(f, dt) {
     if ((f.blackGetsugaLeft || 0) > 0) {
       f.blackGetsugaAt = (f.blackGetsugaAt || 0) - dt;
@@ -3755,6 +3979,31 @@
       } else if (inFront && dist < rngL) {
         hurt(opp, f.meleeDmg || 12, f.palette.glow, { attacker: f, launch: !!f.meleeLaunch });
       }
+    } else if (f.anim === "d_atk" || f.anim === "d_finisher") {
+      var rngD = f.meleeRange || 140;
+      if (f.anim === "d_finisher") {
+        if (dist < rngD) hurt(opp, f.meleeDmg || 28, "#ff5040", { attacker: f, launch: true });
+      } else if (inFront && dist < rngD) {
+        hurt(opp, f.meleeDmg || 13, f.palette.glow, { attacker: f });
+      }
+    } else if (f.anim === "d_chain") {
+      var rngC = f.meleeRange || 300;
+      if (dist <= rngC && Math.abs(dy) < 120) {
+        f.denjiChainHit = true;
+        f.hyperArmor = Math.max(f.hyperArmor || 0, 0.5);
+        opp.pullT = 0.4;
+        opp.pullToX = f.x - f.facing * 40;
+        opp.pullToY = f.y;
+        opp.pullHit = false;
+        hurt(opp, f.meleeDmg || 10, "#e8c070", { attacker: f, noLaunch: true });
+        spawnFloater(f.x, f.y - 180, "钩住", "#e8c070");
+      } else {
+        // 未钩中 CD 减半
+        if (f.skills && f.skills.chain) {
+          f.skills.chain.cd = Math.min(f.skills.chain.cd || 0, (f.skills.chain.max || 3.4) * 0.5);
+        }
+        spawnFloater(f.x, f.y - 170, "未钩中", "#c08070");
+      }
     }
   }
 
@@ -3987,6 +4236,35 @@
         tryCast(f, f.scrollId);
         return;
       }
+    } else if (isDenji(f)) {
+      if (f.denjiRage && f.skills.finisher && f.skills.finisher.cd <= 0 && f.chakra >= 40 && Math.random() < 0.12) {
+        tryCast(f, "finisher");
+        return;
+      }
+      if (!f.denjiRage && dist < 220 && f.skills.overheat && f.skills.overheat.cd <= 0 && f.chakra >= 15 && Math.random() < 0.08) {
+        tryCast(f, "overheat");
+        return;
+      }
+      if (dist < 130 && f.skills.atk && f.skills.atk.cd <= 0) {
+        tryCast(f, "atk");
+        return;
+      }
+      if (dist > 80 && dist < 320 && f.skills.chain && f.skills.chain.cd <= 0 && f.chakra >= 18 && Math.random() < 0.16) {
+        tryCast(f, "chain");
+        return;
+      }
+      if (dist > 60 && dist < 220 && f.skills.slam && f.skills.slam.cd <= 0 && f.chakra >= 21 && Math.random() < 0.14) {
+        tryCast(f, "slam");
+        return;
+      }
+      if (dist < 150 && f.skills.block && f.skills.block.cd <= 0 && f.chakra >= 16 && Math.random() < 0.06) {
+        tryCast(f, "block");
+        return;
+      }
+      if (f.scrollId && f.skills[f.scrollId] && f.skills[f.scrollId].cd <= 0 && f.chakra >= (f.skills[f.scrollId].cost || 0) && Math.random() < 0.05) {
+        tryCast(f, f.scrollId);
+        return;
+      }
     } else if (isFushiguro(f)) {
       if ((f.domainT || 0) <= 0 && dist < 280 && f.skills.domain && f.skills.domain.cd <= 0 && f.chakra > 40 && Math.random() < 0.05) {
         tryCast(f, "domain");
@@ -4183,6 +4461,7 @@
         if (isIchigo(f) && f.bankai) exitIchigoBankai(f);
         if (isLuffy(f) && f.gear2) exitLuffyGear2(f);
         if (isObito(f) && f.juubi) exitObitoJuubi(f);
+        if (isDenji(f) && f.denjiRage) exitDenjiRage(f);
         f.gait = "idle";
         f.dashT = 0;
         f.aiIx = 0;
@@ -4205,6 +4484,9 @@
       } else if (isIchigo(f) && f.bankai) {
         f.chakra = Math.max(0, (f.chakra || 0) - 8 * dt);
         if (f.chakra <= 0) exitIchigoBankai(f);
+      } else if (isDenji(f) && f.denjiRage) {
+        f.chakra = Math.max(0, (f.chakra || 0) - 10 * dt);
+        if (f.chakra <= 0) exitDenjiRage(f);
       } else if (isObito(f) && f.juubi) {
         // pages31o: 十尾形态不持续抽蓝；蓝条在形态内可回（与普通态相同）
         if (f.chakra < f.maxChakra) {
@@ -4383,6 +4665,7 @@
       if (isFushiguro(f)) updateFushiSkills(f, dt);
       if (isGojo(f)) updateGojoSkills(f, dt);
       if (isIchigo(f)) updateIchigoSkills(f, dt);
+      if (isDenji(f)) updateDenjiSkills(f, dt);
       if ((f.fushiSlowT || 0) > 0) f.fushiSlowT = Math.max(0, f.fushiSlowT - dt);
       if (isAirborne(f)) {
         f.dashT = 0;
@@ -4508,7 +4791,7 @@
           f.dashT = 0;
           f.dashDelay = 0;
           f.dashDmg = 0;
-          if (f.anim === "t_water4" || f.anim === "i_flash" || f.anim === "o_juubi_spin") { /* keep anim until animDur */ }
+          if (f.anim === "t_water4" || f.anim === "i_flash" || f.anim === "o_juubi_spin" || f.anim === "d_slam") { /* keep anim until animDur */ }
           else f.anim = "idle";
         }
       } else {
@@ -4575,6 +4858,10 @@
               faceTowardFoe(f);
             }
           }
+          resolveMelee(f);
+        }
+        if (f.hitPending3 && f.animT >= f.hitAt3) {
+          f.hitPending3 = false;
           resolveMelee(f);
         }
         if (f.animT >= f.animDur) {
@@ -5379,7 +5666,7 @@
   }
 
   function drawGroundShadow(f) {
-    var body = isObito(f) ? obitoScale : (isTanjiro(f) ? tanjiroScale * 1.15 : (isGojo(f) ? gojoScale * 1.1 : (isLuffy(f) ? luffyScale * 1.1 : (isIchigo(f) ? ichigoScale * 1.1 : (isFushiguro(f) ? fushiScale * 1.1 : painScale)))));
+    var body = isObito(f) ? obitoScale : (isTanjiro(f) ? tanjiroScale * 1.15 : (isGojo(f) ? gojoScale * 1.1 : (isLuffy(f) ? luffyScale * 1.1 : (isIchigo(f) ? ichigoScale * 1.1 : (isFushiguro(f) ? fushiScale * 1.1 : (isDenji(f) ? denjiScale * 1.1 : painScale))))));
     var lunging = f.anim === "punch" || f.anim === "tele" || f.anim === "breath" || f.anim === "thrust" || f.anim === "cleave" || f.anim === "slash" || f.anim === "dash" || f.anim === "swap" || f.anim === "combo" || f.anim === "kick" || f.anim === "rod" || f.anim === "push" || f.anim === "back" || (f.anim && f.anim.indexOf("t_") === 0);
     var rx = 32;
     var ry = 9;
@@ -6328,6 +6615,136 @@
     }
   }
 
+  function denjiImage(set, index) {
+    if (!set || !set.length) return null;
+    var i = index % set.length;
+    if (i < 0) i += set.length;
+    var img = set[i];
+    if (!img || !img.complete || !img.naturalWidth) return null;
+    return img;
+  }
+  // 电次源帧朝右
+  function denjiNativeDir(set) { return 1; }
+  function drawDenjiAt(x, groundY, facing, set, index, alpha, tilt, shakeAmp) {
+    var img = denjiImage(set, index);
+    if (!img) return;
+    var sc = denjiScale;
+    var sx = 0;
+    var sy = 0;
+    if (shakeAmp && shakeAmp > 0) {
+      sx = (Math.random() * 2 - 1) * shakeAmp * 5;
+      sy = (Math.random() * 2 - 1) * shakeAmp * 2.5;
+      sc = sc * (1 - Math.min(0.015, shakeAmp * 0.05));
+    }
+    var dw = img.width * sc;
+    var dh = img.height * sc;
+    var y = groundY + 2 + denjiFootPad * sc;
+    ctx.save();
+    ctx.translate(x + sx, y + sy);
+    if (tilt) ctx.rotate(tilt);
+    var nativeDir = denjiNativeDir(set);
+    ctx.scale((facing < 0 ? -1 : 1) * nativeDir, 1);
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(img, -dw / 2, -dh, dw, dh);
+    ctx.restore();
+  }
+  function drawDenji(f) {
+    var set = denji.idle;
+    var idx = 0;
+    var alpha = 1;
+    var reacting = isAirborne(f) || isDowned(f) || ((f.stun || 0) > 0 && f.hitLight);
+    var drawFacing = f.facing;
+    if (reacting && (f.hitLeanDir || 0)) {
+      drawFacing = (f.hitLeanDir > 0) ? -1 : 1;
+    }
+    if ((f.knockPhase === "air" || isAirborne(f)) && denji.knock && denji.knock[0] && denji.knock[0].complete) {
+      set = denji.knock;
+      var kat = f.knockT || 0;
+      if (kat < 0.08) idx = 0;
+      else if (kat < 0.22) idx = 1;
+      else if (kat < 0.40) idx = 2;
+      else idx = 3;
+    } else if ((f.knockPhase === "down" || isDowned(f)) && denji.knock && denji.knock[0] && denji.knock[0].complete) {
+      set = denji.knock;
+      var kdt = f.knockT || 0;
+      if ((f.getUpT || 0) > 0) idx = 5;
+      else if (kdt < 0.18) idx = 4;
+      else idx = 5;
+    } else if (f.hitLight && (f.stun || 0) > 0 && denji.hitstun && denji.hitstun[0] && denji.hitstun[0].complete) {
+      set = denji.hitstun;
+      var su = 1 - Math.min(1, (f.stun || 0) / 0.55);
+      idx = Math.min(5, Math.floor(su * 6));
+    } else if (reacting) {
+      set = denji.idle;
+      idx = 0;
+    } else if (f.anim === "d_atk" && denji.atk && denji.atk[0] && denji.atk[0].complete) {
+      set = denji.atk;
+      var ua = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (ua < 0) ua = 0; if (ua > 0.999) ua = 0.999;
+      idx = Math.min(5, Math.floor(ua * 6));
+    } else if (f.anim === "d_chain" && denji.chain && denji.chain[0] && denji.chain[0].complete) {
+      set = denji.chain;
+      var uc = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (uc < 0) uc = 0; if (uc > 0.999) uc = 0.999;
+      idx = Math.min(5, Math.floor(uc * 6));
+    } else if (f.anim === "d_slam" && denji.slam && denji.slam[0] && denji.slam[0].complete) {
+      set = denji.slam;
+      var us = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (us < 0) us = 0; if (us > 0.999) us = 0.999;
+      idx = Math.min(5, Math.floor(us * 6));
+    } else if (f.anim === "d_block" && denji.block && denji.block[0] && denji.block[0].complete) {
+      set = denji.block;
+      var ub = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (ub < 0) ub = 0; if (ub > 0.999) ub = 0.999;
+      idx = Math.min(5, Math.floor(ub * 6));
+    } else if (f.anim === "d_overheat" && denji.overheat && denji.overheat[0] && denji.overheat[0].complete) {
+      set = denji.overheat;
+      var uo = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (uo < 0) uo = 0; if (uo > 0.999) uo = 0.999;
+      idx = Math.min(5, Math.floor(uo * 6));
+    } else if (f.anim === "d_finisher" && denji.finisher && denji.finisher[0] && denji.finisher[0].complete) {
+      set = denji.finisher;
+      var uf = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (uf < 0) uf = 0; if (uf > 0.999) uf = 0.999;
+      idx = Math.min(5, Math.floor(uf * 6));
+    } else if (f.anim && f.anim.indexOf("d_") === 0) {
+      set = denji.idle;
+      idx = Math.min(7, Math.floor(((f.animT || 0) / Math.max(0.01, f.animDur || 0.4)) * 8));
+    } else if (f.gait === "run" || f.gait === "walk") {
+      set = (denji.run && denji.run[0] && denji.run[0].complete) ? denji.run : denji.idle;
+      idx = Math.floor(time * 10) % 8;
+    } else {
+      set = denji.idle;
+      idx = Math.floor(time * 8) % 8;
+    }
+    if (f.invuln > 0 && !isDowned(f) && !isAirborne(f) && Math.sin(time * 40) > 0) alpha *= 0.45;
+    if (f.denjiRage) alpha = Math.min(1, alpha * 1.05);
+    var drawAir = (f.airH || 0);
+    if ((f.denjiDrawAir || 0) > 0) drawAir = f.denjiDrawAir;
+    else if (f.busy > 0 || (f.anim && f.anim.indexOf("d_") === 0)) drawAir = 0;
+    var tiltUse = (set === denji.hitstun || set === denji.knock) ? 0 : fighterDrawTilt(f);
+    drawDenjiAt(f.x, f.y - drawAir, drawFacing, set, idx, alpha, tiltUse, f.hitShake || 0);
+    if (f.denjiRage) {
+      var pulse = 0.55 + 0.45 * Math.sin(time * 12);
+      ctx.save();
+      ctx.translate(f.x, f.y - denjiBodyH * 0.45);
+      ctx.globalAlpha = 0.14 + 0.12 * pulse;
+      ctx.strokeStyle = "#ff3030";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, denjiBodyW * 0.95, denjiBodyH * 0.55, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    } else if ((f.denjiHeat || 0) > 0) {
+      ctx.save();
+      ctx.font = "bold 11px sans-serif";
+      ctx.fillStyle = "#ff9040";
+      ctx.textAlign = "center";
+      ctx.fillText("过热" + f.denjiHeat + "/3", f.x, f.y - denjiBodyH - 8);
+      ctx.restore();
+    }
+  }
+
   function drawFighter(f) {
     drawGroundShadow(f);
     drawHyperArmorAura(f);
@@ -6353,6 +6770,10 @@
     }
     if (isFushiguro(f)) {
       drawFushiguro(f);
+      return;
+    }
+    if (isDenji(f)) {
+      drawDenji(f);
       return;
     }
     drawPain(f);
@@ -6405,6 +6826,10 @@
     }
     if (g.kit === "fushiguro") {
       drawFushiAt(g.x, g.y, g.facing, fushiguro.idle, 0, a, 0, 0);
+      return;
+    }
+    if (g.kit === "denji") {
+      drawDenjiAt(g.x, g.y, g.facing, denji.idle, 0, a, 0, 0);
       return;
     }
     if (g.kit === "pain" || (!g.kit && g.owner === "R")) {
@@ -7384,6 +7809,17 @@
       ctx.textAlign = fromRight ? "right" : "left";
       ctx.fillText("天锁斩月", fromRight ? bx + bw : bx, by + ((f.hyperArmor || 0) > 0 ? 36 : 20));
     }
+    if (isDenji(f) && f.denjiRage) {
+      ctx.fillStyle = "#ff3030";
+      ctx.font = "bold 12px sans-serif";
+      ctx.textAlign = fromRight ? "right" : "left";
+      ctx.fillText("过热狂暴", fromRight ? bx + bw : bx, by + ((f.hyperArmor || 0) > 0 ? 36 : 20));
+    } else if (isDenji(f) && (f.denjiHeat || 0) > 0) {
+      ctx.fillStyle = "#ff9040";
+      ctx.font = "bold 11px sans-serif";
+      ctx.textAlign = fromRight ? "right" : "left";
+      ctx.fillText("过热 " + f.denjiHeat + "/3", fromRight ? bx + bw : bx, by + ((f.hyperArmor || 0) > 0 ? 36 : 20));
+    }
     if (isGojo(f) && (f.phase || 0) > 0) {
       ctx.fillStyle = "#a0c8ff";
       ctx.font = "bold 12px sans-serif";
@@ -7401,7 +7837,7 @@
       ctx.textAlign = fromRight ? "right" : "left";
       var byOff = 20 + ((f.hyperArmor || 0) > 0 ? 16 : 0) + (f.fireForm ? 16 : 0);
       ctx.fillText("水柱 " + f.barrierT.toFixed(1) + "s", fromRight ? bx + bw : bx, by + byOff);
-    } else if (f.chakraLock > 0 && !(isLuffy(f) && f.gear2) && !(isIchigo(f) && f.bankai)) {
+    } else if (f.chakraLock > 0 && !(isLuffy(f) && f.gear2) && !(isIchigo(f) && f.bankai) && !(isDenji(f) && f.denjiRage)) {
       // pages30w/y: 二档/天锁期间只显示形态名，不显示 chakraLock 回蓝倒计时
       ctx.font = "bold 11px sans-serif";
       ctx.fillStyle = "#7ad0ff";
@@ -7419,7 +7855,7 @@
     var sk = f.skills[id];
     var r = rr || 26;
     var big = r > 30;
-    var needFire = (id === "ult2" && isTanjiro(f) && !f.fireForm) || (id === "spear" && isLuffy(f) && !f.gear2) || (id === "mugetsu" && isIchigo(f) && !f.bankai);
+    var needFire = (id === "ult2" && isTanjiro(f) && !f.fireForm) || (id === "spear" && isLuffy(f) && !f.gear2) || (id === "mugetsu" && isIchigo(f) && !f.bankai) || (id === "finisher" && isDenji(f) && !f.denjiRage);
     var ready = !paused && matchState === "fight" && sk.cd <= 0 && !needFire && !(id === "spike" && (f.shield > 0 || f.shieldWind > 0)) && (f.chakra || 0) >= (sk.cost || 0);
     ctx.save();
     ctx.beginPath();
@@ -9058,7 +9494,7 @@
           if (loadMode === "match") return;
           ["obito", "pain", "tanjiro"].forEach(function (k) { registerKitSheets(k); });
           loadMode = "prefetch";
-          ensureGroups(["obito", "pain", "tanjiro", "gojo", "luffy", "ichigo", "fushiguro"], "prefetch");
+          ensureGroups(["obito", "pain", "tanjiro", "gojo", "luffy", "ichigo", "fushiguro", "denji"], "prefetch");
         }, 200);
       })
       .catch(function (e) { if (window.console) console.error("[manifest]", e); });
