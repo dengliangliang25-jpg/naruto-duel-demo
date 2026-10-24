@@ -71,7 +71,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 30s stall → retry UI.
-  var ASSET_V = "pages31o";
+  var ASSET_V = "pages31p";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [], ichigo: [], fushiguro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 6;
@@ -574,11 +574,10 @@
     punch: loadStrip("punch", 8),
     cloth: loadStrip("cloth", 12, "obito/cloth_float"),
     knock: loadStrip("knock", 16, "obito/knockdown"),
-    // pages31l: 十尾人柱力 — 独立 PNG，进 ASSET_GROUPS.obito
+    // pages31p: 十尾 v2 全套 640×560（idle/run/transform/atk/block）；不挂 spin；不叠 fx_juubi_slash
     juubiIdle: loadLoosePng("obito_juubi/juubi_idle", 8, "obito"),
     juubiRun: loadLoosePng("obito_juubi/juubi_run", 8, "obito"),
     juubiTransform: loadLoosePng("obito_juubi/juubi_transform", 6, "obito"),
-    // pages31m: 十尾形态内 Q 杖斩 / E 格挡（紫弧已烤进 juubi_atk，不叠 fx）
     juubiAtk: loadLoosePng("obito_juubi/juubi_atk", 6, "obito"),
     juubiBlock: loadLoosePng("obito_juubi/juubi_block", 6, "obito")
   };
@@ -597,9 +596,9 @@
   // Foot pads stay in source px and are multiplied by these scales, so the shared
   // ground line still lines up.
   var obitoScale = 1.48 * 0.72 * 0.88;
-  // pages31o: 十尾按人体高度标定（idle 人体≈376px），对齐普通带土人体；黑球随人体放大，不为塞特效缩小人
-  var juubiFootPad = 9;
-  var juubiBodyH = 376;
+  // pages31p: 十尾 v2 画布 640×560、FOOT_Y=544、人体≈430；人对齐普通带土；黑球随放大；合层已含紫弧/月牙盾不叠 fx
+  var juubiFootPad = 16; // 560 - 544
+  var juubiBodyH = 430;
   var juubiScale = (180 * obitoScale) / juubiBodyH;
   var painScale = 180 * obitoScale / 143;
   // Body frames were rekeyed at 3x. Draw scale is divided so on-screen height
@@ -2902,7 +2901,7 @@
     }
     spawnFloater(f.x, f.y - 160, "十尾结束", "#a08090");
   }
-  // pages31m: 十尾形态内 Q 杖斩
+  // pages31p: 十尾形态内 Q 杖斩 — 整帧 juubi_atk（合层紫弧），禁止叠 fx_juubi_slash
   function castObitoJuubiAtk(f) {
     f.anim = "o_juubi_atk";
     f.animT = 0;
@@ -2916,7 +2915,7 @@
     f.meleeLaunch = false;
     spawnFloater(f.x, f.y - 170, "杖斩", "#c9a6ff");
   }
-  // pages31m: 十尾形态内 E 无冷格挡
+  // pages31p: 十尾形态内 E 格挡 — 整帧 juubi_block（合层月牙盾），禁止叠 fx
   function castObitoJuubiBlock(f) {
     f.anim = "o_juubi_block";
     f.animT = 0;
