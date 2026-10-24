@@ -71,7 +71,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 30s stall → retry UI.
-  var ASSET_V = "pages31m";
+  var ASSET_V = "pages31n";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [], ichigo: [], fushiguro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 6;
@@ -2886,8 +2886,9 @@
     spawnFloater(f.x, f.y - 190, "十尾人柱力", "#c9a6ff");
   }
   function exitObitoJuubi(f) {
-    if (!f.juubi) return;
+    if (!f.juubi && !f.juubiPendingExit) return;
     f.juubi = false;
+    f.juubiPendingExit = false;
     f.chakraLock = 0;
     f.blockT = 0;
     f.juubiBlockCount = 0;
@@ -2925,7 +2926,7 @@
     f.armor = Math.max(f.armor || 0, 0.9);
     f.blockT = 0.9;
     spawnFloater(f.x, f.y - 170, "格挡", "#a080ff");
-    rings.push({ x: f.x + f.facing * 36, y: f.y - 120, life: 0.85, max: 0.85, color: "rgba(120,64,200,0.4)", r0: 18, r1: 90 });
+    // pages31n: 去掉多余淡紫扩散环，只留 juubi_block 帧内月牙盾
   }
   function doObitoJuubiBlockCounter(f) {
     var opp = other(f);
@@ -4142,7 +4143,15 @@
         if (f.chakra <= 0) exitIchigoBankai(f);
       } else if (isObito(f) && f.juubi) {
         f.chakra = Math.max(0, (f.chakra || 0) - 8 * dt);
-        if (f.chakra <= 0) exitObitoJuubi(f);
+        // pages31n: 蓝尽时若正在播十尾 anim，等播完再退形（不中途掐断）
+        if (f.chakra <= 0) {
+          var ja = f.anim || "";
+          if (ja === "o_juubi_atk" || ja === "o_juubi_block" || ja === "o_juubi") {
+            f.juubiPendingExit = true;
+          } else {
+            exitObitoJuubi(f);
+          }
+        }
       } else if (isTanjiro(f) && f.fireForm) {
         f.chakra = Math.max(0, f.chakra - 8 * dt);
         if (f.chakra <= 0) exitFireForm(f);
@@ -4491,8 +4500,11 @@
             exitFireForm(f);
             f.ult2Phase = 0;
           }
+          // pages31n: 十尾 anim 播完后再执行蓝尽退形
+          var juubiAnimDone = (f.anim === "o_juubi_atk" || f.anim === "o_juubi_block" || f.anim === "o_juubi");
           f.anim = "idle";
           faceTowardFoe(f);
+          if (juubiAnimDone && f.juubiPendingExit) exitObitoJuubi(f);
         }
         }
       }
@@ -7506,8 +7518,11 @@
     var sk = f.skills[skillId];
     sk.cd = 0;
     if ((sk.cost || 0) > 0) f.chakra = Math.max(f.chakra, sk.cost);
-    // Clear stun so the cast can start immediately for training.
+    // pages31n: clear stun/busy so U/I/O… force-cast matches panel click even mid-anim
     f.stun = 0;
+    f.busy = 0;
+    f.dashT = 0;
+    f.castBuf = null;
     if (skillId === "spike") shieldPressDown(f);
     else tryCast(f, skillId);
     return true;
@@ -7583,7 +7598,8 @@
     ctx.fillText("敌方技能（点按或按键 → 右边立刻放招；方向键移敌方）", bx + 16, by + 52);
     ctx.textBaseline = "alphabetic";
     var fAi = aiFighter() || right;
-    var order = rightOrder;
+    // pages31n: bind to AI's own order (L or R), labels always U/I/O… to match keyboard
+    var order = (fAi.id === "L") ? leftOrder : rightOrder;
     var i, n = 0;
     var cols = 4, cw = 138, ch = 30, gx = 6;
     for (i = 0; i < order.length; i++) {
@@ -7593,7 +7609,8 @@
       var x = bx + 16 + (n % cols) * (cw + gx);
       var y = by + 72 + Math.floor(n / cols) * (ch + 8);
       n++;
-      flowButton(x, y, cw, ch, (sk.key || "?") + " " + sk.name, false, (function (id) {
+      var lab = SLOT_LABELS.R[slotIndexFor(order, i)] || sk.key || "?";
+      flowButton(x, y, cw, ch, lab + " " + sk.name, false, (function (id) {
         return function () { practiceForceCast(id); };
       })(sid));
     }
@@ -8513,6 +8530,25 @@
       keysDown[k] = true;
       return;
     }
+    // pages31n: practice U/I/O/P/J/K/L → AI skills by slot (same as panel「U 普攻」)
+    if (gameMode === "practice") {
+      var pracKeys = ["u", "i", "o", "p", "j", "k", "l"];
+      var pracSlot = pracKeys.indexOf(k);
+      if (pracSlot >= 0) {
+        e.preventDefault();
+        if (e.repeat || keysDown[k]) { keysDown[k] = true; return; }
+        keysDown[k] = true;
+        var aiP = aiFighter();
+        if (!aiP || aiP.hp <= 0) return;
+        var ordP = (aiP.id === "L") ? leftOrder : rightOrder;
+        var sidP = null, oiP;
+        for (oiP = 0; oiP < ordP.length; oiP++) {
+          if (slotIndexFor(ordP, oiP) === pracSlot) { sidP = ordP[oiP]; break; }
+        }
+        if (sidP) practiceForceCast(sidP);
+        return;
+      }
+    }
     var mapped = controlMap[k];
     if (!mapped) return;
     e.preventDefault();
@@ -8523,11 +8559,6 @@
     keysDown[k] = true;
     var caster = fighterByOwner(mapped[0]);
     if (!caster) return;
-    // pages29 practice: U/I/O/P/J/K/L force-cast the right sparring partner (ignore humanControls)
-    if (gameMode === "practice" && mapped[0] === "R" && caster === aiFighter()) {
-      practiceForceCast(mapped[1]);
-      return;
-    }
     if (!humanControls(caster)) return;
     if (mapped[1] === "spike") shieldPressDown(caster);
     else tryCast(caster, mapped[1]);
