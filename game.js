@@ -71,7 +71,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 30s stall → retry UI.
-  var ASSET_V = "pages31k";
+  var ASSET_V = "pages31l";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [], ichigo: [], fushiguro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 6;
@@ -554,6 +554,15 @@
     if (!folder) folder = "obito";
     return framesFromStrip(folder, prefix, count);
   }
+  function loadLoosePng(folder, count, group) {
+    var arr = [], i, n, img;
+    for (i = 1; i <= count; i++) {
+      n = i < 10 ? "0" + i : String(i);
+      img = regImg(new Image(), folder + "/" + n + ".png", group || "obito", "kit");
+      arr.push(img);
+    }
+    return arr;
+  }
   var obito = {
     idle: loadStrip("idle", 8),
     walk: loadStrip("walk", 8),
@@ -564,7 +573,11 @@
     tele: loadStrip("tele", 8),
     punch: loadStrip("punch", 8),
     cloth: loadStrip("cloth", 12, "obito/cloth_float"),
-    knock: loadStrip("knock", 16, "obito/knockdown")
+    knock: loadStrip("knock", 16, "obito/knockdown"),
+    // pages31l: 十尾人柱力 — 独立 PNG，进 ASSET_GROUPS.obito
+    juubiIdle: loadLoosePng("obito_juubi/juubi_idle", 8, "obito"),
+    juubiRun: loadLoosePng("obito_juubi/juubi_run", 8, "obito"),
+    juubiTransform: loadLoosePng("obito_juubi/juubi_transform", 6, "obito")
   };
   var portraitImgs = {};
   (function loadPortraits() {
@@ -581,6 +594,9 @@
   // Foot pads stay in source px and are multiplied by these scales, so the shared
   // ground line still lines up.
   var obitoScale = 1.48 * 0.72 * 0.88;
+  // pages31l: 十尾画布 320×436，固定缩放（体型全程不变）
+  var juubiFootPad = 9;
+  var juubiScale = (180 * obitoScale) / 436;
   var painScale = 180 * obitoScale / 143;
   // Body frames were rekeyed at 3x. Draw scale is divided so on-screen height
   // stays the same. painIdleFootPad is still the pre-upscale pad (6); the PNGs
@@ -786,7 +802,7 @@
     if (f.pullOn || f.repulseOn || (f.shieldWind || 0) > 0) return true;
     var a = f.anim || "idle";
     if (a === "idle") return false;
-    if (a.indexOf("t_") === 0 || a.indexOf("g_") === 0 || a.indexOf("l_") === 0 || a.indexOf("i_") === 0 || a.indexOf("f_") === 0) return true;
+    if (a.indexOf("t_") === 0 || a.indexOf("g_") === 0 || a.indexOf("l_") === 0 || a.indexOf("i_") === 0 || a.indexOf("f_") === 0 || a.indexOf("o_") === 0) return true;
     if (a === "combo" || a === "kick" || a === "rod" || a === "push" || a === "back" || a === "pull" || a === "cast" || a === "slash" || a === "punch" || a === "thrust" || a === "cleave" || a === "tele" || a === "breath" || a === "fire" || a === "wave" || a === "swap") return true;
     return false;
   }
@@ -919,7 +935,7 @@
     phase: { key: "E", name: "虚化", role: "灵体", cd: 0, max: 7.8, cost: 30 },
     tele: { key: "R", name: "传送", role: "突进", cd: 0, max: 1.495, cost: 16 },
     breath: { key: "F", name: "喷火", role: "远程", cd: 0, max: 2.21, cost: 22 },
-    space: { key: "C", name: "切空间", role: "空间", cd: 0, max: 1, cost: 0 }
+    juubi: { key: "C", name: "十尾", role: "变身", cd: 0, max: 20, cost: 0 }
   };
   right.skills = {
     thrust: { key: "U", name: "连击", role: "平A", cd: 0, max: 1.014, cost: 0 },
@@ -953,9 +969,9 @@
   left2.skills = {};
   right2.skills = {};
 
-  var leftOrder = ["punch", "phase", "tele", "breath", "space"];
+  var leftOrder = ["punch", "phase", "tele", "breath", "juubi"];
   var rightOrder = ["thrust", "fire", "swap", "spike", "pull", "cleave"];
-  var left2Order = ["punch", "phase", "tele", "breath", "space"];
+  var left2Order = ["punch", "phase", "tele", "breath", "juubi"];
   var right2Order = ["thrust", "fire", "swap", "spike", "pull", "cleave"];
 
   var KIT_DEFS = {
@@ -964,13 +980,13 @@
       weapon: "blade",
       speed: 546,
       palette: { body: "#24315c", trim: "#e8e4f2", glow: "#9eb6ff", deep: "#14182c", hot: "#f0d2c0" },
-      order: ["punch", "phase", "tele", "breath", "space"],
+      order: ["punch", "phase", "tele", "breath", "juubi"],
       skills: {
         punch: { key: "Q", name: "掌击", role: "突进", cd: 0, max: 0.91, cost: 0 },
         phase: { key: "E", name: "虚化", role: "灵体", cd: 0, max: 7.8, cost: 30 },
         tele: { key: "R", name: "传送", role: "突进", cd: 0, max: 1.495, cost: 16 },
         breath: { key: "F", name: "喷火", role: "远程", cd: 0, max: 2.21, cost: 22 },
-        space: { key: "C", name: "切空间", role: "空间", cd: 0, max: 1, cost: 0 }
+        juubi: { key: "C", name: "十尾", role: "变身", cd: 0, max: 20, cost: 0 }
       }
     },
     pain: {
@@ -1119,6 +1135,7 @@
     f.domainT = 0;
     f.gear2 = false;
     f.bankai = false;
+    f.juubi = false;
   }
 
   // pages20: fixed slots on both sides. Non-scroll skills fill slots 0..5 in order;
@@ -1441,6 +1458,7 @@
     f.domainT = 0;
     f.gear2 = false;
     f.bankai = false;
+    f.juubi = false;
     f.balloonT = 0;
     f.blockT = 0;
     if (f.baseMoveSpeed) f.moveSpeed = f.baseMoveSpeed;
@@ -2092,11 +2110,13 @@
     if (id === "ult1" && isTanjiro(f) && f.fireForm) return;
     if (id === "gear2" && isLuffy(f) && f.gear2) return;
     if (id === "bankai" && isIchigo(f) && f.bankai) return;
+    if (id === "juubi" && isObito(f) && f.juubi) return;
     var cost = sk.cost || 0;
     if (id === "ult1" && isTanjiro(f)) cost = Math.floor((f.chakra || 0) * 0.5);
     if (id === "domain" && (isGojo(f) || isFushiguro(f))) cost = Math.floor((f.chakra || 0) * 0.5);
     if (id === "gear2" && isLuffy(f)) cost = Math.floor((f.chakra || 0) * 0.5);
     if (id === "bankai" && isIchigo(f)) cost = Math.floor((f.chakra || 0) * 0.5);
+    if (id === "juubi" && isObito(f)) cost = Math.floor((f.chakra || 0) * 0.5);
     if ((f.chakra || 0) < cost) return;
     // Using any other Obito skill during 虚化 drops out of it right away.
     if (isObito(f) && f.phase > 0 && id !== "phase") endPhase(f);
@@ -2190,6 +2210,7 @@
     else if (id === "block") castIchigoBlock(f);
     else if (id === "bankai") castIchigoBankai(f);
     else if (id === "mugetsu") castIchigoMugetsu(f);
+    else if (id === "juubi") castObitoJuubi(f);
     else if (id === "dogs") castFushiDogs(f);
     else if (id === "nue") castFushiNue(f);
     else if (id === "elephant") castFushiElephant(f);
@@ -2799,6 +2820,23 @@
     f.chakraLock = 0;
     f.moveSpeed = f.baseMoveSpeed || 510;
     spawnFloater(f.x, f.y - 160, "天锁结束", "#c08070");
+  }
+  // pages31l: 带土 C — 十尾人柱力（对齐一护 bankai / 路飞 gear2）
+  function castObitoJuubi(f) {
+    f.anim = "o_juubi";
+    f.animT = 0;
+    f.animDur = 0.6;
+    f.busy = 0.6;
+    f.armor = Math.max(f.armor || 0, 0.35);
+    f.hitPending = false;
+    f.juubi = true;
+    spawnFloater(f.x, f.y - 190, "十尾人柱力", "#c9a6ff");
+  }
+  function exitObitoJuubi(f) {
+    if (!f.juubi) return;
+    f.juubi = false;
+    f.chakraLock = 0;
+    spawnFloater(f.x, f.y - 160, "十尾结束", "#a08090");
   }
   function spawnBlackGetsuga(f) {
     var dir = f.facing < 0 ? -1 : 1;
@@ -3845,8 +3883,8 @@
         tryCast(f, "phase");
         return;
       }
-      if (f.skills.space && f.skills.space.cd <= 0 && Math.random() < 0.08) {
-        tryCast(f, "space");
+      if (!f.juubi && f.skills.juubi && f.skills.juubi.cd <= 0 && f.chakra > 40 && Math.random() < 0.05) {
+        tryCast(f, "juubi");
         return;
       }
       if (f.scrollId && f.skills[f.scrollId] && f.skills[f.scrollId].cd <= 0 && f.chakra >= (f.skills[f.scrollId].cost || 0) && Math.random() < 0.06) {
@@ -3965,6 +4003,7 @@
       if (f.hp <= 0) {
         if (isIchigo(f) && f.bankai) exitIchigoBankai(f);
         if (isLuffy(f) && f.gear2) exitLuffyGear2(f);
+        if (isObito(f) && f.juubi) exitObitoJuubi(f);
         f.gait = "idle";
         f.dashT = 0;
         f.aiIx = 0;
@@ -3987,6 +4026,9 @@
       } else if (isIchigo(f) && f.bankai) {
         f.chakra = Math.max(0, (f.chakra || 0) - 8 * dt);
         if (f.chakra <= 0) exitIchigoBankai(f);
+      } else if (isObito(f) && f.juubi) {
+        f.chakra = Math.max(0, (f.chakra || 0) - 8 * dt);
+        if (f.chakra <= 0) exitObitoJuubi(f);
       } else if (isTanjiro(f) && f.fireForm) {
         f.chakra = Math.max(0, f.chakra - 8 * dt);
         if (f.chakra <= 0) exitFireForm(f);
@@ -5003,8 +5045,15 @@
     var set = obito.idle;
     var idx = 0;
     var alpha = 1;
+    var useJuubiScale = false;
     var reacting = isAirborne(f) || isDowned(f) || ((f.stun || 0) > 0 && f.hitLight);
-    if ((f.knockPhase === "air" || isAirborne(f)) && obito.knock && obito.knock[0] && obito.knock[0].complete) {
+    if (f.anim === "o_juubi" && obito.juubiTransform && obito.juubiTransform[0] && obito.juubiTransform[0].complete) {
+      set = obito.juubiTransform;
+      var uj = f.animDur > 0 ? f.animT / f.animDur : 1;
+      if (uj < 0) uj = 0; if (uj > 0.999) uj = 0.999;
+      idx = Math.min(5, Math.floor(uj * 6));
+      useJuubiScale = true;
+    } else if ((f.knockPhase === "air" || isAirborne(f)) && obito.knock && obito.knock[0] && obito.knock[0].complete) {
       set = obito.knock;
       idx = Math.min(10, Math.floor((f.knockT || 0) * 18));
     } else if ((f.knockPhase === "down" || isDowned(f) || (f.getUpT || 0) > 0 || (f.downT || 0) > 0) && obito.knock && obito.knock[0] && obito.knock[0].complete) {
@@ -5021,23 +5070,39 @@
     } else if (reacting) {
       set = obito.idle;
       idx = 0;
-    } else if (f.anim === "tele") {
-      set = obito.tele;
-      var half = f.animDur * 0.5;
-      var tu = f.teleBlinked ? (f.animT - half) / half : f.animT / half;
-      if (tu < 0) tu = 0;
-      if (tu > 0.999) tu = 0.999;
-      idx = (f.teleBlinked ? 4 : 0) + Math.floor(tu * 4);
-    } else if (f.anim === "punch" || f.anim === "breath") {
-      if (f.anim === "punch") set = obito.punch;
-      else set = obito.breath;
-      var u = f.animDur > 0 ? f.animT / f.animDur : 1;
-      if (u < 0) u = 0;
-      if (u > 0.999) u = 0.999;
-      idx = Math.floor(u * 8);
+    } else if (f.anim === "tele" || f.anim === "punch" || f.anim === "breath") {
+      // pages31l: 十尾半套技能暂用 juubi_idle 顶，保持体型
+      if (f.juubi && obito.juubiIdle && obito.juubiIdle[0] && obito.juubiIdle[0].complete) {
+        set = obito.juubiIdle;
+        useJuubiScale = true;
+        var uj2 = f.animDur > 0 ? f.animT / f.animDur : 1;
+        if (uj2 < 0) uj2 = 0; if (uj2 > 0.999) uj2 = 0.999;
+        idx = Math.min(7, Math.floor(uj2 * 8));
+      } else if (f.anim === "tele") {
+        set = obito.tele;
+        var half = f.animDur * 0.5;
+        var tu = f.teleBlinked ? (f.animT - half) / half : f.animT / half;
+        if (tu < 0) tu = 0;
+        if (tu > 0.999) tu = 0.999;
+        idx = (f.teleBlinked ? 4 : 0) + Math.floor(tu * 4);
+      } else {
+        if (f.anim === "punch") set = obito.punch;
+        else set = obito.breath;
+        var u = f.animDur > 0 ? f.animT / f.animDur : 1;
+        if (u < 0) u = 0;
+        if (u > 0.999) u = 0.999;
+        idx = Math.floor(u * 8);
+      }
     } else if (f.gait === "run" || f.gait === "walk") {
-      set = obito.run;
+      if (f.juubi && obito.juubiRun && obito.juubiRun[0] && obito.juubiRun[0].complete) {
+        set = obito.juubiRun;
+        useJuubiScale = true;
+      } else set = obito.run;
       idx = Math.floor(time * 11) % 8;
+    } else if (f.juubi && obito.juubiIdle && obito.juubiIdle[0] && obito.juubiIdle[0].complete) {
+      set = obito.juubiIdle;
+      idx = Math.floor(time * 8) % 8;
+      useJuubiScale = true;
     } else {
       set = obito.idle;
       idx = 0;
@@ -5080,7 +5145,14 @@
       if (kimg && kimg.width >= 200) knockBoost = 1.55;
       else knockBoost = 1.05;
     }
-    drawObitoAt(f.x, f.y - (f.airH || 0), f.facing, set, idx, alpha, phased, footDrop, knocking ? 0 : fighterDrawTilt(f), knocking ? 0 : (f.hitShake || 0), knockBoost);
+    var scaleMul = knockBoost;
+    var juubiDrop = 0;
+    if (useJuubiScale) {
+      scaleMul = juubiScale / obitoScale;
+      juubiDrop = juubiFootPad * juubiScale;
+      footDrop = juubiDrop;
+    }
+    drawObitoAt(f.x, f.y - (f.airH || 0), f.facing, set, idx, alpha, phased, footDrop, knocking ? 0 : fighterDrawTilt(f), knocking ? 0 : (f.hitShake || 0), scaleMul);
   }
 
   function drawGroundShadow(f) {
@@ -6690,7 +6762,7 @@
       ctx.moveTo(4, 0);
       ctx.lineTo(14, 0);
       ctx.stroke();
-    } else if (id === "space" || id === "dash") {
+    } else if (id === "space" || id === "dash" || id === "juubi") {
       ctx.strokeRect(-12, -8, 10, 16);
       ctx.strokeRect(2, -8, 10, 16);
     } else if (id === "thrust") {
@@ -8262,7 +8334,7 @@
     o: ["R", "swap"],
     p: ["R", "spike"],
     j: ["R", "pull"],
-    c: ["L", "space"],
+    c: ["L", "juubi"],
     k: ["R", "cleave"]
   };
 
