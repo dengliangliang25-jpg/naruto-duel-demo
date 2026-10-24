@@ -71,7 +71,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 30s stall → retry UI.
-  var ASSET_V = "pages31j";
+  var ASSET_V = "pages31k";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [], ichigo: [], fushiguro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 6;
@@ -787,7 +787,7 @@
     var a = f.anim || "idle";
     if (a === "idle") return false;
     if (a.indexOf("t_") === 0 || a.indexOf("g_") === 0 || a.indexOf("l_") === 0 || a.indexOf("i_") === 0 || a.indexOf("f_") === 0) return true;
-    if (a === "combo" || a === "kick" || a === "rod" || a === "push" || a === "back" || a === "pull" || a === "cast" || a === "slash" || a === "punch" || a === "thrust" || a === "cleave" || a === "tele" || a === "breath" || a === "fire" || a === "wave") return true;
+    if (a === "combo" || a === "kick" || a === "rod" || a === "push" || a === "back" || a === "pull" || a === "cast" || a === "slash" || a === "punch" || a === "thrust" || a === "cleave" || a === "tele" || a === "breath" || a === "fire" || a === "wave" || a === "swap") return true;
     return false;
   }
   // Repulsion sheet: frames 1-12 are F05-F16, 13-20 are F17-F24. Play once, no loop.
@@ -4974,7 +4974,7 @@
     if (shakeAmp && shakeAmp > 0) {
       sx = (Math.random() * 2 - 1) * shakeAmp * 5;
       sy = (Math.random() * 2 - 1) * shakeAmp * 2.5;
-      sc = sc * (1 - Math.min(0.08, shakeAmp * 0.35));
+      sc = sc * (1 - Math.min(0.015, shakeAmp * 0.05));
     }
     var dw = img.width * sc;
     var dh = img.height * sc;
@@ -5173,7 +5173,7 @@
     if (shakeAmp && shakeAmp > 0) {
       sx = (Math.random() * 2 - 1) * shakeAmp * 5;
       sy = (Math.random() * 2 - 1) * shakeAmp * 2.5;
-      sc = sc * (1 - Math.min(0.08, shakeAmp * 0.35));
+      sc = sc * (1 - Math.min(0.015, shakeAmp * 0.05));
     }
     var dw = img.width * sc;
     var dh = img.height * sc;
@@ -5328,7 +5328,7 @@
     if (shakeAmp && shakeAmp > 0) {
       sx = (Math.random() * 2 - 1) * shakeAmp * 5;
       sy = (Math.random() * 2 - 1) * shakeAmp * 2.5;
-      sc = sc * (1 - Math.min(0.08, shakeAmp * 0.35));
+      sc = sc * (1 - Math.min(0.015, shakeAmp * 0.05));
     }
     var dw = img.width * sc;
     var dh = img.height * sc;
@@ -5523,7 +5523,7 @@
     if (shakeAmp && shakeAmp > 0) {
       sx = (Math.random() * 2 - 1) * shakeAmp * 5;
       sy = (Math.random() * 2 - 1) * shakeAmp * 2.5;
-      sc = sc * (1 - Math.min(0.08, shakeAmp * 0.35));
+      sc = sc * (1 - Math.min(0.015, shakeAmp * 0.05));
     }
     var dw = img.width * sc;
     var dh = img.height * sc;
@@ -5679,7 +5679,7 @@
     if (shakeAmp && shakeAmp > 0) {
       sx = (Math.random() * 2 - 1) * shakeAmp * 5;
       sy = (Math.random() * 2 - 1) * shakeAmp * 2.5;
-      sc = sc * (1 - Math.min(0.08, shakeAmp * 0.35));
+      sc = sc * (1 - Math.min(0.015, shakeAmp * 0.05));
     }
     var dw = img.width * sc;
     var dh = img.height * sc;
@@ -5807,7 +5807,7 @@
     if (shakeAmp && shakeAmp > 0) {
       sx = (Math.random() * 2 - 1) * shakeAmp * 5;
       sy = (Math.random() * 2 - 1) * shakeAmp * 2.5;
-      sc = sc * (1 - Math.min(0.08, shakeAmp * 0.35));
+      sc = sc * (1 - Math.min(0.015, shakeAmp * 0.05));
     }
     var dw = img.width * sc;
     var dh = img.height * sc;
@@ -5943,7 +5943,7 @@
     if (shakeAmp && shakeAmp > 0) {
       sx = (Math.random() * 2 - 1) * shakeAmp * 5;
       sy = (Math.random() * 2 - 1) * shakeAmp * 2.5;
-      sc = sc * (1 - Math.min(0.08, shakeAmp * 0.35));
+      sc = sc * (1 - Math.min(0.015, shakeAmp * 0.05));
     }
     var dw = img.width * sc;
     var dh = img.height * sc;
