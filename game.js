@@ -71,7 +71,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 30s stall → retry UI.
-  var ASSET_V = "pages31r";
+  var ASSET_V = "pages31s";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [], ichigo: [], fushiguro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 6;
@@ -622,7 +622,7 @@
     kick: [20, 21, 21, 21, 21, 17],
     rod: [25, 25, 27, 29, 24, 17],
     push: [18, 19, 17, 17, 18, 18],
-    turn: [18, 17, 23, 23, 19, 23],
+    turn: [21, 21, 21, 21, 21, 21],
     land: [21, 21, 21, 21, 19, 18],
     jump: [19, 20, 18, 18, 18, 18]
   };
@@ -830,8 +830,9 @@
   var pullCastFps = 18;
   var pullCastSpan = 24 / pullCastFps;
   // Fixed idle-body calibration (idle body 433@3x vs cast sheet body 532) — not per-frame bbox.
-  var pullCastScale = painScale * (433 / 3) / 532;
-  var pullCastFootPad = 6;
+  // pages31s: pull cast 已统一 canvasH=461 / body≈434，与常态同 scale，不再按 532 outer box 补偿
+  var pullCastScale = painScale / 3;
+  var pullCastFootPad = 21;
   var pullFxScale = 1.15;
   var pullActiveFrom = 8 / pullCastFps;
   var pullActiveUntil = 17 / pullCastFps;
