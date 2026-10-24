@@ -71,7 +71,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 30s stall → retry UI.
-  var ASSET_V = "pages31n";
+  var ASSET_V = "pages31o";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [], ichigo: [], fushiguro: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 6;
@@ -597,9 +597,10 @@
   // Foot pads stay in source px and are multiplied by these scales, so the shared
   // ground line still lines up.
   var obitoScale = 1.48 * 0.72 * 0.88;
-  // pages31l: 十尾画布 320×436，固定缩放（体型全程不变）
+  // pages31o: 十尾按人体高度标定（idle 人体≈376px），对齐普通带土人体；黑球随人体放大，不为塞特效缩小人
   var juubiFootPad = 9;
-  var juubiScale = (180 * obitoScale) / 436;
+  var juubiBodyH = 376;
+  var juubiScale = (180 * obitoScale) / juubiBodyH;
   var painScale = 180 * obitoScale / 143;
   // Body frames were rekeyed at 3x. Draw scale is divided so on-screen height
   // stays the same. painIdleFootPad is still the pre-upscale pad (6); the PNGs
@@ -2144,7 +2145,7 @@
     if (id === "domain" && (isGojo(f) || isFushiguro(f))) cost = Math.floor((f.chakra || 0) * 0.5);
     if (id === "gear2" && isLuffy(f)) cost = Math.floor((f.chakra || 0) * 0.5);
     if (id === "bankai" && isIchigo(f)) cost = Math.floor((f.chakra || 0) * 0.5);
-    if (id === "juubi" && isObito(f)) cost = Math.floor((f.chakra || 0) * 0.5);
+    // pages31o: 十尾进场不扣半蓝（形态内蓝条不掉；Q/E 按技能表正常耗蓝）
     if ((f.chakra || 0) < cost) return;
     // Using any other Obito skill during 虚化 drops out of it right away.
     if (isObito(f) && f.phase > 0 && id !== "phase") endPhase(f);
@@ -4142,15 +4143,9 @@
         f.chakra = Math.max(0, (f.chakra || 0) - 8 * dt);
         if (f.chakra <= 0) exitIchigoBankai(f);
       } else if (isObito(f) && f.juubi) {
-        f.chakra = Math.max(0, (f.chakra || 0) - 8 * dt);
-        // pages31n: 蓝尽时若正在播十尾 anim，等播完再退形（不中途掐断）
-        if (f.chakra <= 0) {
-          var ja = f.anim || "";
-          if (ja === "o_juubi_atk" || ja === "o_juubi_block" || ja === "o_juubi") {
-            f.juubiPendingExit = true;
-          } else {
-            exitObitoJuubi(f);
-          }
+        // pages31o: 十尾形态不持续抽蓝；蓝条在形态内可回（与普通态相同）
+        if (f.chakra < f.maxChakra) {
+          f.chakra = Math.min(f.maxChakra, f.chakra + 11.2 * dt);
         }
       } else if (isTanjiro(f) && f.fireForm) {
         f.chakra = Math.max(0, f.chakra - 8 * dt);
@@ -6141,7 +6136,8 @@
   }
   // pages31j: idle/hitstun/knock/atk/dogs/elephant 源朝左 → -1；run/nue/shadow/domain 朝右 +1
   function fushiNativeDir(set) {
-    if (set === fushiguro.idle || set === fushiguro.hitstun || set === fushiguro.knock || set === fushiguro.atk || set === fushiguro.dogs || set === fushiguro.elephant) return -1;
+    // pages31o: idle/run/atk/domain 源图朝右 → +1（修出生/停步锁左）；hitstun/knock/玉犬/满象源图朝左 → -1
+    if (set === fushiguro.hitstun || set === fushiguro.knock || set === fushiguro.dogs || set === fushiguro.elephant) return -1;
     return 1;
   }
   function drawFushiAt(x, groundY, facing, set, index, alpha, tilt, shakeAmp, scaleMul, srcOx) {
