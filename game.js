@@ -71,7 +71,7 @@
   var charHover = -1;
   // pages23: spritesheet loader. Each kit is 1–3 webp atlases (~5 total) plus ~15
   // core images. fetch+blob decode; match load exclusive; 30s stall → retry UI.
-  var ASSET_V = "pages31v";
+  var ASSET_V = "pages31w";
   var ASSET_GROUPS = { core: [], obito: [], pain: [], tanjiro: [], gojo: [], luffy: [], ichigo: [], fushiguro: [], denji: [] };
   var assetErrors = [];
   var LOAD_CONCURRENCY = 6;
@@ -821,6 +821,8 @@
   var denjiBodyH = 380 * denjiScale;
 
   var clothFps = 9;
+  // pages31w: 开战站立静止 — idle 定在第 0 帧，不再循环出场/飘布动画
+  function idleStillIdx(n) { return 0; }
   function plantCaster(f) {
     f.airH = 0;
     f.airV = 0;
@@ -4386,7 +4388,8 @@
         if (f.x > W - KNOCK_EDGE) { f.x = W - KNOCK_EDGE; if (f.launchVx > 0) f.launchVx = 0; if (f.hitPushVx > 0) f.hitPushVx = 0; }
       }
     }
-    if (matchState === "fight") separateBodies(dt);
+    // pages31w: 贴身可穿透，不再互推顶开
+    // if (matchState === "fight") separateBodies(dt);
   }
   var KNOCK_EDGE = 220;
   // pages31g: 身体不重叠（全角色）。走位边界与 clampSpot 一致（90..1190）；
@@ -5656,15 +5659,11 @@
       idx = Math.floor(time * 11) % 8;
     } else if (f.juubi && obito.juubiIdle && obito.juubiIdle[0] && obito.juubiIdle[0].complete) {
       set = obito.juubiIdle;
-      idx = Math.floor(time * 8) % 8;
+      idx = idleStillIdx(8);
       useJuubiScale = true;
     } else {
       set = obito.idle;
-      idx = 0;
-      if (obito.cloth[0] && obito.cloth[0].complete && obito.cloth[0].naturalWidth > 0) {
-        set = obito.cloth;
-        idx = Math.floor(time * clothFps) % 12;
-      }
+      idx = idleStillIdx(8);
     }
     var phased = f.phase > 0;
     var knocking = set === obito.knock || set === obito.juubiKnock || set === obito.juubiLand || set === obito.juubiHit;
@@ -5864,11 +5863,7 @@
       idx = Math.floor(time * 11) % 6;
     } else {
       set = pain.idle;
-      idx = 0;
-      if (pain.cloth[0] && pain.cloth[0].complete && pain.cloth[0].naturalWidth > 0) {
-        set = pain.cloth;
-        idx = Math.floor(time * clothFps) % 12;
-      }
+      idx = idleStillIdx(8);
     }
     if (f.invuln > 0 && !isDowned(f) && !isAirborne(f) && Math.sin(time * 40) > 0) alpha *= 0.45;
     var footDrop = 0;
@@ -6065,14 +6060,14 @@
     } else if ((f.barrierT || 0) > 0 && !f.barrierUsed && f.gait !== "run" && f.gait !== "walk") {
       // pages25: hold the 二型 guard pose for the whole stance instead of dropping to idle
       set = form.water2;
-      idx = 3 + (Math.floor(time * 6) % 2);
+      idx = 3; // pages31w: 站立静止，不再闪帧
     } else if (f.gait === "run" || f.gait === "walk") {
       // pages30g: dedicated run strip (8 frames); fall back to idle if unbound
       set = (tanjiro.run && tanjiro.run[0] && tanjiro.run[0].complete) ? tanjiro.run : tanjiro.idle;
       idx = Math.floor(time * 10) % 8;
     } else {
       set = tanjiro.idle;
-      idx = Math.floor(time * 8) % 8;
+      idx = idleStillIdx(8);
     }
     if (f.invuln > 0 && !isDowned(f) && !isAirborne(f) && Math.sin(time * 40) > 0) alpha *= 0.45;
     // pages25: small forward lunge on sword swings so the strike reads even with subtle frames
@@ -6275,7 +6270,7 @@
       idx = Math.floor(time * 10) % 8;
     } else {
       set = gojo.idle;
-      idx = Math.floor(time * 8) % 8;
+      idx = idleStillIdx(8);
     }
     if (f.phase > 0) alpha = 0.55;
     else if (f.invuln > 0 && !isDowned(f) && !isAirborne(f) && Math.sin(time * 40) > 0) alpha *= 0.45;
@@ -6391,7 +6386,7 @@
     } else {
       if (f.gear2 && luffy.gear2Idle && luffy.gear2Idle[0] && luffy.gear2Idle[0].complete) set = luffy.gear2Idle;
       else set = luffy.idle;
-      idx = Math.floor(time * 8) % 8;
+      idx = idleStillIdx(8);
     }
     if (f.invuln > 0 && !isDowned(f) && !isAirborne(f) && Math.sin(time * 40) > 0) alpha *= 0.45;
     if (f.gear2) alpha = Math.min(1, alpha * 1.05);
@@ -6520,7 +6515,7 @@
     } else {
       if (f.bankai && ichigo.bankaiIdle && ichigo.bankaiIdle[0] && ichigo.bankaiIdle[0].complete) set = ichigo.bankaiIdle;
       else set = ichigo.idle;
-      idx = Math.floor(time * 8) % 8;
+      idx = idleStillIdx(8);
     }
     if (f.invuln > 0 && !isDowned(f) && !isAirborne(f) && Math.sin(time * 40) > 0) alpha *= 0.45;
     if (f.bankai) alpha = Math.min(1, alpha * 1.05);
@@ -6635,7 +6630,7 @@
       idx = Math.floor(time * 10) % 8;
     } else {
       set = fushiguro.idle;
-      idx = Math.floor(time * 8) % 8;
+      idx = idleStillIdx(8);
     }
     if (f.invuln > 0 && skillKey !== "shadow" && !isDowned(f) && !isAirborne(f) && Math.sin(time * 40) > 0) alpha *= 0.45;
     var drawAir = (f.airH || 0);
@@ -6757,7 +6752,7 @@
       idx = Math.floor(time * 10) % 8;
     } else {
       set = denji.idle;
-      idx = Math.floor(time * 8) % 8;
+      idx = idleStillIdx(8);
     }
     if (f.invuln > 0 && !isDowned(f) && !isAirborne(f) && Math.sin(time * 40) > 0) alpha *= 0.45;
     if (f.denjiRage) alpha = Math.min(1, alpha * 1.05);
